@@ -1,0 +1,25 @@
+﻿# Carpetas de Node.js
+bot-wasap/node_modules/
+
+# Información de sesión (sensible)
+bot-wasap/baileys_auth/
+
+# Archivos de Python
+__pycache__/
+*.pyc
+
+# Archivos de sistema
+.DS_Store
+
+# ... otros archivos ignorados
+credenciales/google-cloud-key.json
+
+# Carpetas de Node.js y Python
+bot-wasap/node_modules/
+__pycache__/
+
+# Información de sesión (sensible)
+bot-wasap/baileys_auth/
+
+# Archivos de secretos
+service_account.json
