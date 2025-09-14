@@ -6,6 +6,9 @@ import json
 import gspread
 from google.oauth2 import service_account
 from datetime import datetime
+import Levenshtein
+from .models import Producto
+
 
 # --- Configuración de la API de Google Sheets ---
 SERVICE_ACCOUNT_FILE = settings.BASE_DIR / 'service_account.json'
@@ -172,6 +175,10 @@ def consultar_stock(request, codigo):
     return JsonResponse({'error': 'Producto no encontrado'}, status=404)
 
 @csrf_exempt
+def _norm(text):
+    """Normaliza el texto para la búsqueda."""
+    return text.lower().strip().replace(" ", "")
+
 def buscar_producto_por_nombre(request):
     query = request.GET.get('q', '').strip()
     if not query:
@@ -185,14 +192,18 @@ def buscar_producto_por_nombre(request):
     if not sabores_y_toppings_data:
         return JsonResponse({'error': 'No se pudieron cargar los sabores y toppings.'}, status=500)
 
+    # Normalizar la consulta del usuario y dividirla en palabras clave
     query_normalized = _norm(query)
-    
+    query_words = query_normalized.split()
+
     matched_products = []
+
     for producto in inv_raw:
         nombre_normalized = _norm(producto.get('NombreProducto', ''))
         codigo_normalized = _norm(producto.get('CodigoProducto', ''))
-
-        if query_normalized in nombre_normalized or query_normalized in codigo_normalized:
+        
+        # Verificar si TODAS las palabras clave del usuario se encuentran en el nombre del producto
+        if all(word in nombre_normalized for word in query_words) or query_normalized in codigo_normalized:
             matched_products.append(producto)
 
     if not matched_products:
