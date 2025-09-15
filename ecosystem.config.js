@@ -5,14 +5,9 @@ module.exports = {
       script: "manage.py",
       args: ["runserver", "127.0.0.1:8001"],
       interpreter: "python",
-      cwd: "C:/Users/Administrador/Documents/Mundoherlados/inventario_wasap/",
-      // Eliminamos wait_ready y listen_timeout
+      // La ruta de la API es "inventario_wasap"
+      cwd: "./inventario_wasap/",
     },
-    {
-      name: "MundoHeladosBot",
-      script: "index.js",
-      cwd: "C:/Users/Administrador/Documents/Mundoherlados/bot-wasap/",
-      // Eliminamos wait_ready y listen_timeout
-    },
+    // ... (configuración del bot)
   ],
 };
