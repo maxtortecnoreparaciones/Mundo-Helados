@@ -1,0 +1,653 @@
+'use strict';
+
+const fs = require('fs');
+const axios = require('axios');
+const path = require('path');
+const { parsePrice, parseProductAndQuantity, money, isGreeting, wantsMenu } = require('../utils/util');
+const {
+    say,
+    sendImage,
+    resetChat,
+    cart,
+    addToCart,
+    cartSummary,
+    getDeliveryCost,
+    handleProductSelection,
+    startEncargoBrowse,
+    askGemini,
+    sleep
+} = require('../services/bot_core');
+const {
+    logConversation,
+    logUserError,
+    logger
+} = require('../utils/logger');
+const PHASE = require('../utils/phases');
+const CONFIG = require('../config.json');
+const ENDPOINTS = CONFIG.ENDPOINTS;
+
+function normalizeText(text) {
+    if (!text) return '';
+    return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+
+function isKeyword(text, keywords) {
+    if (!text) return false;
+    const lowerText = text.toLowerCase().trim();
+    return keywords.some(keyword => lowerText === keyword.toLowerCase());
+}
+
+const processedMessages = new Map();
+const MESSAGE_CACHE_DURATION = 5 * 60 * 1000;
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, timestamp] of processedMessages.entries()) {
+        if (now - timestamp > MESSAGE_CACHE_DURATION) {
+            processedMessages.delete(key);
+        }
+    }
+}, MESSAGE_CACHE_DURATION);
+
+function validateInput(input, expectedType, options = {}) {
+    const cleanInput = input.toLowerCase().trim();
+    switch (expectedType) {
+        case 'number':
+            const num = parseInt(cleanInput);
+            return !isNaN(num) && num > 0 && (options.max ? num <= options.max : true);
+        case 'option':
+            return options.validOptions ? options.validOptions.includes(cleanInput) : false;
+        case 'confirmation':
+            return ['si', 'sí', 'yes', 'y'].includes(cleanInput);
+        case 'cancellation':
+            return ['no', 'n', 'cancelar'].includes(cleanInput);
+        case 'address':
+            return cleanInput.length >= 8;
+        case 'string':
+            return cleanInput.length >= options.minLength;
+        default:
+            return cleanInput.length > 0;
+    }
+}
+
+function shouldResetForInactivity(userSession, currentTime) {
+    const timeSinceLastActivity = currentTime - userSession.lastPromptAt;
+    const INACTIVITY_THRESHOLD = CONFIG.TIME?.BLOCK_DURATION_MS || (30 * 60 * 1000);
+    const isInactive = timeSinceLastActivity > INACTIVITY_THRESHOLD;
+    
+    return isInactive && userSession.phase !== PHASE.SELECCION_OPCION;
+}
+
+function initializeUserSession(jid, ctx) {
+    if (!ctx.sessions[jid]) {
+        ctx.sessions[jid] = { 
+            phase: PHASE.SELECCION_OPCION, 
+            lastPromptAt: Date.now(), 
+            errorCount: 0, 
+            order: { items: [] },
+            currentProduct: null,
+            saboresSeleccionados: [],
+            toppingsSeleccionados: [],
+            lastMatches: [],
+            createdAt: Date.now()
+        };
+    }
+    return ctx.sessions[jid];
+}
+
+async function processIncomingMessage(sock, msg, ctx) {
+    try {
+        const { from, text, key } = msg;
+        const cleanedText = text.replace(/[^0-9]/g, '').trim(); 
+        const t = text.toLowerCase().trim();
+
+        if (!text || !from || from.includes('status@broadcast') || from.includes('@g.us') || key.fromMe) return;
+
+        if (processedMessages.has(key.id)) return;
+        processedMessages.set(key.id, Date.now());
+        
+        logConversation(from, text);
+        const jid = from;
+
+        const userSession = initializeUserSession(jid, ctx);
+        const now = Date.now();
+        userSession.lastPromptAt = now;
+
+        if (jid === CONFIG.ADMIN_JID) {
+            switch (t) {
+                case 'test':
+                    await say(sock, jid, `🤖 Bot funcionando. Sesiones activas: ${Object.keys(ctx.sessions).length}`, ctx);
+                    return;
+                case 'reset':
+                    resetChat(jid, ctx);
+                    await say(sock, jid, '🔄 Chat reiniciado. ✅', ctx);
+                    return;
+                case 'disable':
+                    ctx.botEnabled = false;
+                    await say(sock, jid, '🔴 Bot desactivado. 📴', ctx);
+                    return;
+                case 'enable':
+                    ctx.botEnabled = true;
+                    await say(sock, jid, '🟢 Bot activado. 🔛', ctx);
+                    return;
+                default:
+                    break;
+            }
+        }
+
+        if (!ctx.botEnabled && jid !== CONFIG.ADMIN_JID) {
+            await say(sock, jid, '🚫 Bot desactivado temporalmente. 😔', ctx);
+            return;
+        }
+
+        if (isGreeting(t) || wantsMenu(t) || shouldResetForInactivity(userSession, now)) {
+            resetChat(jid, ctx);
+            await sendMainMenu(sock, jid, ctx);
+            return;
+        }
+
+        let handled = false;
+        if (t === 'pagar' || t === 'carrito' || t === 'ver carrito') {
+            await handleCartSummary(sock, jid, userSession, ctx);
+            handled = true;
+        } else if (t === 'menu' || t === 'menú' || t === 'inicio' || t === 'volver') {
+            await sendMainMenu(sock, jid, ctx);
+            handled = true;
+        }
+
+        if (!handled) {
+            switch (userSession.phase) {
+                case PHASE.SELECCION_OPCION:
+                    await handleSeleccionOpcion(sock, jid, t, userSession, ctx);
+                    break;
+                case PHASE.BROWSE_IMAGES:
+                    await handleBrowseImages(sock, jid, t, userSession, ctx);
+                    break;
+                case PHASE.SELECCION_PRODUCTO:
+                    await handleSeleccionProducto(sock, jid, t, userSession, ctx);
+                    break;
+                case PHASE.SELECT_DETAILS:
+                    await handleSelectDetails(sock, jid, t, userSession, ctx);
+                    break;
+                case PHASE.SELECT_QUANTITY:
+                    // ✅ CORRECCIÓN CLAVE: Usar 'cleanedText' solo aquí
+                    await handleSelectQuantity(sock, jid, cleanedText, userSession, ctx);
+                    break;
+                case PHASE.ENTER_ADDRESS:
+                    // ✅ CORRECCIÓN CLAVE: Usar 'text' aquí
+                    await handleEnterAddress(sock, jid, text, userSession, ctx);
+                    break;
+                case PHASE.ENTER_NAME:
+                    // ✅ CORRECCIÓN CLAVE: Usar 'text' aquí
+                    await handleEnterName(sock, jid, text, userSession, ctx);
+                    break;
+                case PHASE.ENTER_PAYMENT_METHOD:
+                    // ✅ CORRECCIÓN CLAVE: Usar 'text' aquí
+                    await handleEnterPaymentMethod(sock, jid, text, userSession, ctx);
+                    break;
+                case PHASE.CONFIRM_ORDER:
+                    await handleConfirmOrder(sock, jid, t, userSession, ctx);
+                    break;
+                case PHASE.ENCARGO:
+                    await handleEncargo(sock, jid, t, userSession, ctx);
+                    break;
+                default:
+                    logger.warn(`Fase desconocida: ${userSession.phase} para ${jid}`);
+                    resetChat(jid, ctx);
+                    await sendMainMenu(sock, jid, ctx);
+                    break;
+            }
+        }
+        
+        if (userSession.errorCount > 3) {
+            logger.warn(`Demasiados errores para ${jid}, reiniciando chat.`);
+            resetChat(jid, ctx);
+            await say(sock, jid, 'Hemos reiniciado el chat debido a múltiples intentos fallidos. Por favor, intenta de nuevo.', ctx);
+        }
+
+    } catch (error) {
+        console.error('Error al procesar mensaje:', error);
+        logUserError(msg.from, 'main_handler', msg.text, error.stack);
+        try {
+            await say(sock, msg.from, '⚠️ Ocurrió un error. Por favor, intenta de nuevo o escribe "menu" para volver al inicio.', ctx);
+        } catch (e) {
+            logger.error('Error al enviar mensaje de error:', e);
+        }
+    }
+}
+
+async function handleCheckout(sock, jid, input, userSession, ctx) {
+    if (validateInput(input, 'confirmation')) {
+        try {
+            const summary = cartSummary(ctx, jid);
+            const orderTotal = summary.total + userSession.order.deliveryCost;
+            
+            const orderData = {
+                items: userSession.order.items.map(item => ({
+                    codigo: item.codigo,
+                    nombre: item.nombre,
+                    cantidad: item.quantity,
+                    precio: item.price,
+                    sabores: item.sabores.join(', '),
+                    toppings: item.toppings.join(', '),
+                })),
+                direccion: userSession.order.address,
+                total: orderTotal,
+                delivery: userSession.order.deliveryCost,
+                cliente: jid.split('@')[0],
+                fecha: new Date().toISOString()
+            };
+            
+            const sheetsApiUrl = CONFIG.ENDPOINTS.GOOGLE_SHEETS_API;
+            await axios.post(sheetsApiUrl, orderData);
+
+            await say(sock, jid, `🎉 ¡Tu pedido ha sido confirmado! Un agente se contactará contigo para coordinar el pago y la entrega.`, ctx);
+            
+            const orderInfo = `🆕 NUEVO PEDIDO:\nCliente: ${jid}\nDirección: ${userSession.order.address}\nTotal: COP$${money(orderTotal)}\nProductos:\n${summary.text}`;
+            await say(sock, CONFIG.ADMIN_JID, orderInfo, ctx);
+            
+            resetChat(jid, ctx);
+        } catch (error) {
+            logger.error('Error al procesar pedido o enviar a Google Sheets:', error);
+            await say(sock, jid, '⚠️ Ocurrió un error al procesar el pedido. Por favor, contacta directamente con nosotros.', ctx);
+        }
+    } else if (validateInput(input, 'cancellation')) {
+        await say(sock, jid, `❌ Pedido cancelado. ¿Deseas hacer algo más?`, ctx);
+        userSession.phase = PHASE.BROWSE_IMAGES;
+        userSession.errorCount = 0;
+    } else {
+        userSession.errorCount++;
+        await say(sock, jid, '❌ Por favor, responde **si** para confirmar o **no** para cancelar.', ctx);
+    }
+}
+
+async function sendMainMenu(sock, jid, ctx) {
+    const welcomeMessage = `Holiii ☺️
+Como estas? Somos heladeria mundo helados en riohacha🍦
+
+*1)* 🛍️ Ver nuestro menú y hacer un pedido
+*2)* 📍 Dirección y horarios  
+*3)* 📦 Pedidos por encargo (litros, eventos y grandes cantidades)
+
+_Escribe el número de la opción (1, 2 o 3)._`;
+    await say(sock, jid, welcomeMessage, ctx);
+    ctx.sessions[jid].phase = PHASE.SELECCION_OPCION;
+    ctx.sessions[jid].errorCount = 0;
+}
+
+async function handleSeleccionOpcion(sock, jid, input, userSession, ctx) {
+    switch (input) {
+        case '1':
+            await say(sock, jid, '📋 ¡Aquí está nuestro delicioso menú del día!', ctx);
+            const menuPath1 = path.join(__dirname, '../menu-1.jpeg');
+            const menuPath2 = path.join(__dirname, '../menu-2.jpeg');
+            if (fs.existsSync(menuPath1)) await sendImage(sock, jid, menuPath1, 'Menú - Parte 1', ctx);
+            if (fs.existsSync(menuPath2)) await sendImage(sock, jid, menuPath2, 'Menú - Parte 2', ctx);
+            
+            await say(sock, jid, `🔍 *Paso 1:* Escribe el *NOMBRE* completo o una palabra de tu producto favorito. Ejemplos: Copa Brownie, Volcán, Búho, Helado`, ctx);
+            userSession.phase = PHASE.BROWSE_IMAGES;
+            userSession.errorCount = 0;
+            break;
+            
+        case '2':
+            await say(sock, jid, `📍 *Nuestra ubicación:* Cra 7h n 34 b 08\n🕐 *Horario de atención:* Todos los días de 2:00 PM a 10:00 PM`, ctx);
+            await sleep(1500);
+            await sendMainMenu(sock, jid, ctx);
+            break;
+            
+        case '3':
+            await startEncargoBrowse(sock, jid, ctx);
+            userSession.phase = PHASE.ENCARGO;
+            break;
+            
+        default:
+            userSession.errorCount++;
+            await say(sock, jid, '❌ No entendí esa opción. Por favor, elige 1, 2 o 3.', ctx);
+            break;
+    }
+}
+
+async function handleBrowseImages(sock, jid, text, userSession, ctx) {
+    try {
+        const normalizedQuery = normalizeText(text);
+
+        const response = await axios.get(`${CONFIG.API_BASE}${ENDPOINTS.BUSCAR_PRODUCTO}`, { params: { q: normalizedQuery } });
+        let productos = [];
+
+        if (response.data.matches) {
+            productos = response.data.matches;
+        } else if (response.data.CodigoProducto) {
+            productos = [response.data];
+        }
+
+        productos.forEach(p => {
+            if (p.Precio_Venta) {
+                const precioString = String(p.Precio_Venta);
+                p.Precio_Venta = parseFloat(precioString.replace('.', ''));
+            }
+            if (p.Numero_de_Sabores) {
+                p.Numero_de_Sabores = parseInt(p.Numero_de_Sabores, 10);
+            }
+            if (p.Numero_de_Toppings) {
+                p.Numero_de_Toppings = parseInt(p.Numero_de_Toppings, 10);
+            }
+        });
+
+        if (productos.length === 1) {
+            await handleProductSelection(sock, jid, productos[0], ctx);
+            userSession.phase = PHASE.SELECT_DETAILS;
+            userSession.currentProduct = productos[0];
+            userSession.errorCount = 0;
+        } else if (productos.length > 1) {
+            userSession.phase = PHASE.SELECCION_PRODUCTO;
+            userSession.lastMatches = productos;
+            const list = productos.slice(0, 10).map((p, i) => `*${i + 1}.* ${p.NombreProducto}`).join('\n');
+            await say(sock, jid, `🤔 Encontré varios productos similares:\n${list}\n_Escribe el número del producto que deseas._`, ctx);
+            userSession.errorCount = 0;
+        } else {
+            userSession.errorCount++;
+            await say(sock, jid, `❌ No encontré el producto *"${text}"*. Intenta con una palabra clave.`, ctx);
+        }
+    } catch (error) {
+        logger.error('[browse] error:', error.response?.data || error.message);
+        userSession.errorCount++;
+        await say(sock, jid, '⚠️ Error de conexión. Por favor, intenta de nuevo.', ctx);
+    }
+}
+
+async function handleSeleccionProducto(sock, jid, input, userSession, ctx) {
+    const selection = parseInt(input);
+    const matches = userSession.lastMatches;
+    if (!validateInput(input, 'number', { max: matches.length })) {
+        userSession.errorCount++;
+        await say(sock, jid, `❌ Por favor, elige un número entre 1 y ${matches.length}.`, ctx);
+        return;
+    }
+    const producto = matches[selection - 1];
+    await handleProductSelection(sock, jid, producto, ctx);
+    userSession.phase = PHASE.SELECT_DETAILS;
+    userSession.currentProduct = producto;
+    userSession.errorCount = 0;
+}
+
+async function handleSelectDetails(sock, jid, input, userSession, ctx) {
+    const producto_actual = userSession.currentProduct;
+    if (!producto_actual) {
+        await say(sock, jid, '⚠️ Error: No hay producto seleccionado. Volviendo al menú.', ctx);
+        await sendMainMenu(sock, jid, ctx);
+        return;
+    }
+
+    const selectedOptions = input.split(/[\s,]+/).filter(Boolean);
+    let valid = true;
+    const saboresElegidos = [];
+    const toppingsElegidos = [];
+    
+    if (input.toLowerCase().includes('sin') || input === '0') {
+        userSession.saboresSeleccionados = [];
+        userSession.toppingsSeleccionados = [];
+    } else {
+        for (const option of selectedOptions) {
+            const upperOption = option.toUpperCase();
+            if (upperOption.startsWith('S') && producto_actual.sabores) {
+                const flavorIndex = parseInt(upperOption.substring(1)) - 1;
+                if (flavorIndex >= 0 && flavorIndex < producto_actual.sabores.length) {
+                    saboresElegidos.push(producto_actual.sabores[flavorIndex]);
+                } else { valid = false; break; }
+            } else if (upperOption.startsWith('T') && producto_actual.toppings) {
+                const toppingIndex = parseInt(upperOption.substring(1)) - 1;
+                if (toppingIndex >= 0 && toppingIndex < producto_actual.toppings.length) {
+                    toppingsElegidos.push(producto_actual.toppings[toppingIndex]);
+                } else { valid = false; break; }
+            }
+        }
+        if (!valid) {
+            userSession.errorCount++;
+            await say(sock, jid, `❌ Opción no válida. Usa *S1, T2* o *sin*.`, ctx);
+            return;
+        }
+        userSession.saboresSeleccionados = saboresElegidos;
+        userSession.toppingsSeleccionados = toppingsElegidos;
+    }
+
+    await say(sock, jid, '🔢 ¿Cuántas unidades de este producto quieres?', ctx);
+    userSession.phase = PHASE.SELECT_QUANTITY;
+    userSession.errorCount = 0;
+}
+
+async function handleSelectQuantity(sock, jid, cleanedText, userSession, ctx) {
+    const quantity = parseInt(cleanedText);
+    if (!validateInput(cleanedText, 'number', { max: 50 })) {
+        userSession.errorCount++;
+        await say(sock, jid, '❌ Por favor, escribe un número válido entre 1 y 50.', ctx);
+        return;
+    }
+    
+    addToCart(ctx, jid, {
+        codigo: userSession.currentProduct.CodigoProducto,
+        nombre: userSession.currentProduct.NombreProducto,
+        precio: userSession.currentProduct.Precio_Venta,
+        sabores: userSession.saboresSeleccionados,
+        toppings: userSession.toppingsSeleccionados,
+    }, quantity);
+
+    const totalPrice = userSession.currentProduct.Precio_Venta * quantity;
+    await say(sock, jid, `✅ ¡Agregado! *${quantity}x* ${userSession.currentProduct.NombreProducto} - *COP$${money(totalPrice)}*`, ctx);
+    
+    userSession.phase = PHASE.BROWSE_IMAGES;
+
+    await say(sock, jid, `¿Qué deseas hacer ahora?\n\n🛒 Escribe *carrito* o *pagar* - Ver tu pedido\n🍨 Escribe el nombre o una palabra de otro producto para seguir comprando\n📋 Escribe *menu* - Volver al menú principal`, ctx);
+
+    userSession.currentProduct = null;
+    userSession.saboresSeleccionados = [];
+    userSession.toppingsSeleccionados = [];
+    userSession.errorCount = 0;
+}
+
+async function handleCartSummary(sock, jid, userSession, ctx) {
+    const currentCart = cart(ctx, jid);
+
+    userSession.currentProduct = null;
+    userSession.saboresSeleccionados = [];
+    userSession.toppingsSeleccionados = [];
+    userSession.lastMatches = [];
+    userSession.errorCount = 0;
+
+    if (currentCart.length === 0) {
+        await say(sock, jid, `🛒 Tu carrito está vacío.`, ctx);
+        await sendMainMenu(sock, jid, ctx);
+    } else {
+        const summary = cartSummary(ctx, jid);
+        await say(sock, jid, summary.text, ctx);
+        await say(sock, jid, `💰 Total: COP$${money(summary.total)}`, ctx);
+
+        userSession.phase = PHASE.ENTER_ADDRESS;
+        await say(sock, jid, `📍 Para continuar, escribe tu *dirección completa* para el envío:`, ctx);
+    }
+}
+
+async function handleEnterAddress(sock, jid, address, userSession, ctx) {
+    if (!validateInput(address, 'address')) {
+        userSession.errorCount++;
+        await say(sock, jid, '❌ Por favor, proporciona una dirección más detallada (mínimo 8 caracteres).', ctx);
+        return;
+    }
+    
+    userSession.order.address = address.trim();
+    
+    userSession.phase = PHASE.ENTER_NAME;
+    await say(sock, jid, `👤 ¿A nombre de quién va el pedido? Escribe tu nombre completo.`, ctx);
+    userSession.errorCount = 0;
+}
+
+async function handleEnterName(sock, jid, input, userSession, ctx) {
+    if (!validateInput(input, 'string', { minLength: 3 })) {
+        userSession.errorCount++;
+        await say(sock, jid, '❌ Por favor, escribe un nombre válido (mínimo 3 caracteres).', ctx);
+        return;
+    }
+
+    userSession.order.name = input.trim();
+    userSession.phase = PHASE.ENTER_PAYMENT_METHOD;
+    userSession.errorCount = 0;
+
+    await say(sock, jid, '💳 ¿Cómo vas a pagar? Escribe *Transferencia* o *Efectivo*.', ctx);
+}
+
+async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
+    const paymentMethod = input.toLowerCase().trim();
+    if (paymentMethod !== 'transferencia' && paymentMethod !== 'efectivo') {
+        userSession.errorCount++;
+        await say(sock, jid, '❌ Opción no válida. Por favor, escribe *Transferencia* o *Efectivo*.', ctx);
+        return;
+    }
+
+    userSession.order.paymentMethod = paymentMethod;
+    userSession.errorCount = 0;
+
+    if (paymentMethod === 'transferencia') {
+        const qrPath = path.join(__dirname, '../qr.png');
+        if (fs.existsSync(qrPath)) {
+            await sendImage(sock, jid, qrPath, 'Escanea el siguiente código QR para realizar el pago. Recuerda enviarnos la imagen del pago por favor.', ctx);
+        }
+    }
+    
+    userSession.phase = PHASE.CONFIRM_ORDER;
+    const summary = cartSummary(ctx, jid);
+    userSession.order.deliveryCost = await getDeliveryCost(userSession.order.address);
+    const orderTotal = summary.total + (userSession.order.deliveryCost || 0);
+
+    const summaryText = `📝 *Resumen del pedido*\n` +
+                        `Productos:\n${summary.text}\n` +
+                        `Subtotal: COP$${money(summary.total)}\n` +
+                        `Domicilio: COP$${money(userSession.order.deliveryCost)}\n` +
+                        `Total: COP$${money(orderTotal)}\n\n` +
+                        `Datos de entrega\n` +
+                        `👤 Nombre: ${userSession.order.name}\n` +
+                        `🏠 Dirección: ${userSession.order.address}\n` +
+                        `💳 Pago: ${userSession.order.paymentMethod}\n\n` +
+                        `¿Está todo correcto?\nEscribe *confirmar* para finalizar, o *editar* para cambiar algún dato.\n` +
+                        `Para cancelar y volver al inicio, escribe *menú*.`;
+
+    await say(sock, jid, summaryText, ctx);
+}
+
+async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
+    const confirmation = input.toLowerCase().trim();
+
+    if (confirmation === 'confirmar') {
+        try {
+            const summary = cartSummary(ctx, jid);
+            const orderTotal = summary.total + userSession.order.deliveryCost;
+            
+            const orderData = {
+                items: userSession.order.items.map(item => ({
+                    nombre: item.nombre,
+                    cantidad: item.quantity,
+                    precio: item.price,
+                })),
+                nombreCliente: userSession.order.name,
+                direccion: userSession.order.address,
+                metodoPago: userSession.order.paymentMethod,
+                total: orderTotal,
+            };
+            
+            const sheetsApiUrl = CONFIG.ENDPOINTS.GOOGLE_SHEETS_API;
+            await axios.post(sheetsApiUrl, orderData);
+
+            await say(sock, jid, '🎉 ¡Tu pedido ha sido confirmado! Un agente se contactará contigo para coordinar la entrega. ¡Gracias por tu compra!', ctx);
+            
+            const orderInfo = `🆕 NUEVO PEDIDO:\nCliente: ${jid}\nNombre: ${userSession.order.name}\nDirección: ${userSession.order.address}\nMétodo de pago: ${userSession.order.paymentMethod}\nTotal: COP$${money(orderTotal)}\nProductos:\n${summary.text}`;
+            await say(sock, CONFIG.ADMIN_JID, orderInfo, ctx);
+
+            resetChat(jid, ctx);
+        } catch (error) {
+            logger.error('Error al procesar pedido o enviar a Google Sheets:', error);
+            await say(sock, jid, '⚠️ Ocurrió un error al procesar el pedido. Por favor, contacta directamente con nosotros.', ctx);
+        }
+
+    } else if (confirmation === 'editar') {
+        await say(sock, jid, '📝 ¿Qué dato deseas editar? Por favor, escribe de nuevo tu dirección para empezar de nuevo el proceso de datos. Si deseas cancelar, escribe *menú*.', ctx);
+        userSession.phase = PHASE.ENTER_ADDRESS;
+        
+    } else if (confirmation === 'menú') {
+        resetChat(jid, ctx);
+        await sendMainMenu(sock, jid, ctx);
+    } else {
+        userSession.errorCount++;
+        await say(sock, jid, '❌ Por favor, escribe *confirmar*, *editar* o *menú*.', ctx);
+    }
+}
+
+async function handleEncargo(sock, jid, input, userSession, ctx) {
+    await say(sock, jid, `📦 Procesando tu solicitud de encargo... Un agente te contactará pronto.`, ctx);
+    if (CONFIG.ADMIN_JID) {
+        await say(sock, CONFIG.ADMIN_JID, `📦 SOLICITUD DE ENCARGO:\nCliente: ${jid}\nMensaje: ${input}`, ctx);
+    }
+    resetChat(jid, ctx);
+}
+
+function setupSocketHandlers(sock, ctx) {
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        for (const msg of messages) {
+            if (!msg.message) continue;
+            const messageData = {
+                from: msg.key.remoteJid,
+                text: msg.message?.conversation || msg.message?.extendedTextMessage?.text || '',
+                key: msg.key
+            };
+            if (!messageData.text || !messageData.text.trim()) continue;
+            processIncomingMessage(sock, messageData, ctx).catch(error => {
+                logger.error('❌ Error crítico al procesar mensaje:', error);
+                logUserError(messageData.from, 'main_handler', messageData.text, error.stack);
+            });
+        }
+    });
+
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === 'close') {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
+            if (shouldReconnect) logger.info('🔄 Intentando reconectar...');
+            else logger.error('🚫 Error de autenticación. Escanear QR nuevamente.');
+        } else if (connection === 'open') {
+            logger.info('✅ Conexión establecida.');
+        }
+    });
+
+    sock.ev.on('creds.update', () => logger.info('🔑 Credenciales actualizadas'));
+    logger.info('🎯 Event handlers configurados.');
+}
+
+function startMaintenanceTasks(ctx) {
+    setInterval(() => {
+        const now = Date.now();
+        const oneHour = 60 * 60 * 1000;
+        let cleanedSessions = 0;
+        for (const [jid, session] of Object.entries(ctx.sessions)) {
+            if (now - session.lastPromptAt > oneHour) {
+                delete ctx.sessions[jid];
+                cleanedSessions++;
+            }
+        }
+        if (cleanedSessions > 0) logger.info(`🧹 Limpieza automática: ${cleanedSessions} sesiones inactivas eliminadas`);
+    }, oneHour);
+    logger.info('⚙️ Tareas de mantenimiento iniciadas');
+}
+
+function initializeBotContext() {
+    const ctx = {
+        sessions: {},
+        botEnabled: true,
+        startTime: Date.now(),
+        version: '2.0.0'
+    };
+    logger.info('✅ Contexto del bot inicializado.');
+    return ctx;
+}
+
+module.exports = {
+    setupSocketHandlers,
+    startMaintenanceTasks,
+    initializeBotContext
+};
