@@ -1,26 +1,44 @@
-# 🤖 Bot de Pedidos para WhatsApp - Mundo Helados
+# 🤖 Chatbot de Ventas para WhatsApp - Mundo Helados
 
-Este proyecto es un bot de pedidos automatizado para WhatsApp, diseñado para una heladería. Permite a los clientes explorar el menú, realizar un pedido, y finalizar la compra de forma interactiva y guiada, 24/7. El bot gestiona el flujo de la conversación, administra el carrito de compras del usuario y se integra con un sistema de backend para procesar los pedidos.
+Este es un chatbot transaccional desarrollado con Node.js y Baileys para automatizar el proceso de pedidos de la heladería "Mundo Helados". El bot guía al usuario a través del menú, la selección de productos, la personalización y la confirmación del pedido.
 
-### 🚀 Características y Tecnologías
+## ✨ Características Principales
 
-* **Node.js**: Entorno de ejecución de JavaScript.
-* **Baileys**: Librería para interactuar con la API de WhatsApp.
-* **Express**: Framework para la creación de un servidor web y la API de backend.
-* **Manejo de estados (Finite State Machine)**: Lógica de conversación robusta y predecible.
-* **Integración con API RESTful**: Comunicación con un backend para la gestión de productos y pedidos.
-* **Manejo de sesiones**: Soporte para múltiples conversaciones simultáneas.
+-   **Flujo de Pedido Completo:** Desde el saludo inicial hasta la confirmación y notificación al administrador.
+-   **Manejo de Estado por Fases:** El bot sabe en qué parte de la conversación está cada usuario para dar respuestas coherentes.
+-   **Integración con APIs Externas:**
+    -   Consume una API REST para obtener el catálogo de productos y precios en tiempo real.
+    -   Utiliza la API de Google Gemini para responder preguntas abiertas y conversaciones casuales.
+-   **Arquitectura Modular:** El código está organizado en manejadores (handlers), servicios y gestores (managers) para facilitar su mantenimiento y escalabilidad.
+-   **Proceso de Pago:** Guía al usuario en la selección de método de pago (Efectivo/Transferencia) y presenta la información necesaria.
 
-* ### ⚙️ Instalación
+## 🚀 Stack Tecnológico
 
-1.  Clona este repositorio:
-    `git clone https://github.com/tu_usuario/MundoHeladosBot.git`
-2.  Navega al directorio del proyecto:
-    `cd MundoHeladosBot`
-3.  Instala las dependencias:
-    `npm install`
-4.  Crea un archivo `.env` en la raíz del proyecto y configura tus variables de entorno (ver la sección de 'Configuración de Credenciales').
-5.  Ejecuta la aplicación:
-    `npm start`
+-   **Backend:** Node.js
+-   **Librería de WhatsApp:** Baileys
+-   **Inteligencia Artificial:** Google Gemini API
+-   **Peticiones HTTP:** Axios
 
-El bot generará un código QR en la terminal. Escanéalo con tu teléfono desde la opción 'Dispositivos vinculados' en WhatsApp.
+## ⚙️ Instalación y Uso
+
+1.  **Clonar el repositorio:**
+    ```bash
+    git clone [https://github.com/maxtortecnoreparaciones/Mundo-Helados.git](https://github.com/maxtortecnoreparaciones/Mundo-Helados.git)
+    ```
+2.  **Instalar dependencias:**
+    ```bash
+    cd Mundo-Helados
+    npm install
+    ```
+3.  **Configurar Variables de Entorno:**
+    -   Renombra el archivo `.env.example` a `.env`.
+    -   Añade tus claves de API y configuraciones en el archivo `.env`.
+
+4.  **Iniciar el bot:**
+    ```bash
+    npm start
+    ```
+
+## 📸 Demostración (Prueba desde el numero que funciona actualmente)
+
+
