@@ -274,25 +274,35 @@ async function handleBrowseImages(sock, jid, text, userSession, ctx) {
             productos = [response.data];
         }
 
-        // Normalización de precios y números (sin cambios)
         productos.forEach(p => {
-            if (p.Precio_Venta) {
-                const precioString = String(p.Precio_Venta);
-                p.Precio_Venta = parseFloat(precioString.replace('.', ''));
-            }
-            if (p.Numero_de_Sabores) {
-                p.Numero_de_Sabores = parseInt(p.Numero_de_Sabores, 10);
-            }
-            if (p.Numero_de_Toppings) {
-                p.Numero_de_Toppings = parseInt(p.Numero_de_Toppings, 10);
-            }
+            if (p.Precio_Venta) { p.Precio_Venta = parseFloat(String(p.Precio_Venta).replace('.', '')); }
+            if (p.Numero_de_Sabores) { p.Numero_de_Sabores = parseInt(p.Numero_de_Sabores, 10); }
+            if (p.Numero_de_Toppings) { p.Numero_de_Toppings = parseInt(p.Numero_de_Toppings, 10); }
         });
 
         if (productos.length === 1) {
-            await handleProductSelection(sock, jid, productos[0], ctx);
-            userSession.phase = PHASE.SELECT_DETAILS;
-            userSession.currentProduct = productos[0];
+            const producto = productos[0];
+            
+            // Se envía el mensaje de selección primero
+            await handleProductSelection(sock, jid, producto, ctx);
+            
+            userSession.currentProduct = producto;
             userSession.errorCount = 0;
+
+            // --- LÓGICA CORREGIDA PARA LA FASE ---
+            // Revisa si el producto tiene opciones. Si no, salta directamente
+            // a la fase de pedir la cantidad. Esto arregla el bucle.
+            const numSabores = parseInt(producto.Numero_de_Sabores || 0);
+            const numToppings = parseInt(producto.Numero_de_Toppings || 0);
+
+            if (numSabores > 0 || numToppings > 0) {
+                userSession.phase = PHASE.SELECT_DETAILS;
+            } else {
+                userSession.phase = PHASE.SELECT_QUANTITY;
+            }
+            logger.info(`[${jid}] -> Producto único encontrado. Nueva fase establecida a: ${userSession.phase}`);
+
+
         } else if (productos.length > 1) {
             userSession.phase = PHASE.SELECCION_PRODUCTO;
             userSession.lastMatches = productos;
