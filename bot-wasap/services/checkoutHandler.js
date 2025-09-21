@@ -1,5 +1,3 @@
-// RUTA: services/checkoutHandler.js - CORREGIDO Y ACTUALIZADO
-
 'use strict';
 
 const fs = require('fs');
@@ -11,13 +9,6 @@ const { logger } = require('../utils/logger');
 const PHASE = require('../utils/phases');
 const CONFIG = require('../config.json');
 
-
-// =================================================================================
-// CAMBIO 1: SE CREA UNA FUNCIÓN INTERNA PARA GENERAR EL RESUMEN DEL CARRITO.
-// Esta función no se exporta, solo la usan las demás funciones de este archivo.
-// Elimina la dependencia de `bot_core.js` y soluciona el error `cartSummary is not a function`.
-// También corrige cómo se muestran los sabores y toppings.
-// =================================================================================
 function generateCartSummary(userSession) {
     if (!userSession || !userSession.order || !userSession.order.items) {
         return { text: 'Tu carrito está vacío.', total: 0 };
@@ -29,7 +20,6 @@ function generateCartSummary(userSession) {
         total += itemTotal;
         let itemText = `*${item.cantidad}x* ${item.nombre} - *${money(itemTotal)}*`;
 
-        // CORRECCIÓN: Se mapea el nombre del sabor/topping correctamente.
         if (item.sabores && item.sabores.length > 0) {
             itemText += `\n  sabores: _${item.sabores.map(s => s.NombreProducto).join(', ')}_`;
         }
@@ -45,7 +35,6 @@ function generateCartSummary(userSession) {
     };
 }
 
-
 function validateInput(input, expectedType, options = {}) {
     const cleanInput = input.toLowerCase().trim();
     switch (expectedType) {
@@ -53,7 +42,7 @@ function validateInput(input, expectedType, options = {}) {
             const num = parseInt(cleanInput);
             return !isNaN(num) && num > 0 && (options.max ? num <= options.max : true);
         case 'confirmation':
-            return ['si', 'sí', 'yes', 'y', 'confirmar', '1'].includes(cleanInput); // Añadido '1'
+            return ['si', 'sí', 'yes', 'y', 'confirmar', '1'].includes(cleanInput);
         case 'cancellation':
             return ['no', 'n', 'cancelar'].includes(cleanInput);
         case 'address':
@@ -71,21 +60,22 @@ function validateInput(input, expectedType, options = {}) {
 
 async function handleCartSummary(sock, jid, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleCartSummary.`);
-    
+
     if (!userSession.order || userSession.order.items.length === 0) {
-        logger.info(`[${jid}] -> Carrito vacío. Volviendo al menú principal.`);
+        logger.info(`[${jid}] -> Carrito vacío.`);
         await say(sock, jid, `🛒 Tu carrito está vacío. Escribe *menú* para empezar a comprar.`, ctx);
-        userSession.phase = PHASE.SELECCION_OPCION; // Devuelve al usuario a un estado seguro
         return;
     }
 
-    // CAMBIO 2: Se utiliza la nueva función interna `generateCartSummary`.
     const summary = generateCartSummary(userSession);
+    const summaryMessage = `📝 *Este es tu pedido actual:*\n\n${summary.text}\n\n*Total del pedido: ${money(summary.total)}*`;
+    await say(sock, jid, summaryMessage, ctx);
+    
+    const addressPrompt = `Para continuar con el envío, por favor, escribe tu *dirección completa*.`;
+    await say(sock, jid, addressPrompt, ctx);
 
-    const fullMessage = `📝 *Este es tu pedido actual:*\n\n${summary.text}\n\n*Total del pedido: ${money(summary.total)}*\n\n¿Qué deseas hacer?\n\n*1)* ✅ Confirmar y finalizar pedido\n*2)* ➕ Seguir comprando\n*3)* ✏️ Editar mi pedido (Próximamente)\n*4)* 🗑️ Vaciar carrito y empezar de nuevo`;
-
-    await say(sock, jid, fullMessage, ctx);
-    userSession.phase = PHASE.CONFIRM_ORDER;
+    userSession.phase = PHASE.CHECK_DIR;
+    logger.info(`[${jid}] -> Carrito mostrado. Pasando a la fase de solicitar dirección: ${userSession.phase}`);
 }
 
 async function handleEnterAddress(sock, jid, address, userSession, ctx) {
@@ -115,6 +105,24 @@ async function handleEnterName(sock, jid, input, userSession, ctx) {
     }
 
     userSession.order.name = input.trim();
+    userSession.phase = PHASE.CHECK_TELEFONO;
+    userSession.errorCount = 0;
+
+    await say(sock, jid, '📞 Ahora, por favor, escribe el número de teléfono para contactarte por la entrega.', ctx);
+    logger.info(`[${jid}] -> Fase cambiada a ${userSession.phase}. Solicitando teléfono.`);
+}
+
+async function handleEnterTelefono(sock, jid, input, userSession, ctx) {
+    logger.info(`[${jid}] -> Entrando a handleEnterTelefono. Teléfono recibido: "${input}"`);
+    const telefono = input.replace(/[^0-9]/g, '').trim();
+
+    if (!validateInput(telefono, 'string', { minLength: 10 })) {
+        userSession.errorCount++;
+        await say(sock, jid, '❌ Por favor, escribe un número de teléfono válido (mínimo 10 dígitos).', ctx);
+        return;
+    }
+
+    userSession.order.telefono = telefono;
     userSession.phase = PHASE.CHECK_PAGO;
     userSession.errorCount = 0;
 
@@ -144,9 +152,8 @@ async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
     }
 
     userSession.phase = PHASE.CONFIRM_ORDER;
-    // CAMBIO 3: Se utiliza la nueva función interna `generateCartSummary`.
     const summary = generateCartSummary(userSession);
-    userSession.order.deliveryCost = 0; // Costo de domicilio (puedes calcularlo aquí)
+    userSession.order.deliveryCost = 0;
     const orderTotal = summary.total + (userSession.order.deliveryCost || 0);
 
     const summaryText = `📝 *Resumen final del pedido*\n\n` +
@@ -156,6 +163,7 @@ async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
         `*Total a pagar: ${money(orderTotal)}*\n\n` +
         `*Datos de entrega:*\n` +
         `👤 Nombre: ${userSession.order.name}\n` +
+        `📞 Teléfono: ${userSession.order.telefono}\n` +
         `🏠 Dirección: ${userSession.order.address}\n` +
         `💳 Pago: ${userSession.order.paymentMethod}\n\n` +
         `¿Está todo correcto?\nEscribe *confirmar* para finalizar o *editar* para cambiar algún dato.`;
@@ -167,20 +175,19 @@ async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
 async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
     const confirmation = input.toLowerCase().trim();
 
-    // Redirige las opciones numéricas a la lógica de confirmación del pedido
-    if (['1', '2', '3', '4'].includes(confirmation) && userSession.phase === PHASE.CONFIRM_ORDER) {
+    if (['1', '2', '3', '4'].includes(confirmation)) {
         switch (confirmation) {
             case '1':
-                // Continuar con la confirmación
-                break;
+                await confirmAndProcessOrder(sock, jid, userSession, ctx);
+                return;
             case '2':
                 userSession.phase = PHASE.BROWSE_IMAGES;
                 await say(sock, jid, 'Claro, puedes seguir comprando. Escribe el nombre de otro producto o "menú" para ver las opciones.', ctx);
                 return;
-            case '3': // Editar (Próximamente)
+            case '3':
                 await say(sock, jid, 'La función para editar el pedido estará disponible pronto. Por ahora, puedes cancelar y empezar de nuevo escribiendo "menú".', ctx);
                 return;
-            case '4': // Vaciar carrito
+            case '4':
                 userSession.order.items = [];
                 userSession.phase = PHASE.BROWSE_IMAGES;
                 await say(sock, jid, '🗑️ Tu carrito ha sido vaciado. ¡Empecemos de nuevo! Escribe "menú".', ctx);
@@ -188,52 +195,8 @@ async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
         }
     }
 
-
     if (validateInput(confirmation, 'confirmation')) {
-        try {
-            if (!userSession.order.items || userSession.order.items.length === 0) {
-                await say(sock, jid, '⚠️ Tu carrito está vacío. No se puede confirmar un pedido sin productos.', ctx);
-                resetChat(jid, ctx);
-                return;
-            }
-
-            // CAMBIO 4: Se utiliza la nueva función interna `generateCartSummary`.
-            const summary = generateCartSummary(userSession);
-            const orderTotal = summary.total + (userSession.order.deliveryCost || 0);
-
-            // Preparar datos para la API
-            const detallesDelProducto = userSession.order.items.map(item => {
-                const saboresText = (item.sabores && item.sabores.length > 0) ? `Sabores: ${item.sabores.map(s => s.NombreProducto).join(', ')}` : '';
-                const toppingsText = (item.toppings && item.toppings.length > 0) ? `Toppings: ${item.toppings.map(t => t.NombreProducto).join(', ')}` : '';
-                let detalles = [saboresText, toppingsText].filter(Boolean).join('; ');
-                return `${item.nombre} ${detalles ? `(${detalles})` : ''} x${item.cantidad}`;
-            }).join(' | ');
-
-            const orderData = {
-                nombre: userSession.order.name || '',
-                telefono: jid.replace('@s.whatsapp.net', ''),
-                direccion: userSession.order.address || '',
-                monto: orderTotal,
-                producto: detallesDelProducto,
-                pago: userSession.order.paymentMethod || 'Pendiente',
-                // ...otros campos
-            };
-            
-            // Envío a la API
-            await axios.post(CONFIG.ENDPOINTS.REGISTRAR_CONFIRMACION, orderData);
-
-            await say(sock, jid, '🎉 ¡Tu pedido ha sido confirmado! Un agente se contactará contigo para coordinar la entrega. ¡Gracias por tu compra!', ctx);
-            
-            const orderInfoForAdmin = `🆕 NUEVO PEDIDO:\nCliente: ${jid.replace('@s.whatsapp.net', '')}\nNombre: ${userSession.order.name}\nDirección: ${userSession.order.address}\nMétodo de pago: ${userSession.order.paymentMethod}\nTotal: ${money(orderTotal)}\n\n*Productos:*\n${summary.text}`;
-            await say(sock, CONFIG.ADMIN_JID, orderInfoForAdmin, ctx);
-
-            resetChat(jid, ctx);
-
-        } catch (error) {
-            logger.error('Error al procesar pedido o enviar a API:', error.response?.data || error.message);
-            await say(sock, jid, '⚠️ Ocurrió un error al procesar el pedido. Por favor, contacta directamente con nosotros.', ctx);
-        }
-
+        await confirmAndProcessOrder(sock, jid, userSession, ctx);
     } else if (confirmation === 'editar') {
         await say(sock, jid, '📝 Para editar, empecemos de nuevo con los datos de entrega. Por favor, escribe tu *dirección*:', ctx);
         userSession.phase = PHASE.CHECK_DIR;
@@ -243,10 +206,73 @@ async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
     }
 }
 
+
+async function confirmAndProcessOrder(sock, jid, userSession, ctx) {
+    try {
+        if (!userSession.order.items || userSession.order.items.length === 0) {
+            await say(sock, jid, '⚠️ Tu carrito está vacío...', ctx);
+            userSession.phase = PHASE.SELECCION_OPCION;
+            return;
+        }
+
+        const summary = generateCartSummary(userSession);
+        const orderTotal = summary.total + (userSession.order.deliveryCost || 0);
+
+        const detallesDelProducto = userSession.order.items.map(item => {
+            const saboresText = (item.sabores && item.sabores.length > 0) ? `Sabores: ${item.sabores.map(s => s.NombreProducto).join(', ')}` : '';
+            const toppingsText = (item.toppings && item.toppings.length > 0) ? `Toppings: ${item.toppings.map(t => t.NombreProducto).join(', ')}` : '';
+            let detalles = [saboresText, toppingsText].filter(Boolean).join('; ');
+            return `${item.nombre} ${detalles ? `(${detalles})` : ''} x${item.cantidad}`;
+        }).join(' | ');
+        
+        const firstItem = userSession.order.items[0];
+
+        const orderData = {
+            nombre: userSession.order.name || '',
+            telefono: userSession.order.telefono || jid.split('@')[0],
+            direccion: userSession.order.address || '',
+            monto: orderTotal,
+            producto: detallesDelProducto,
+            pago: userSession.order.paymentMethod || 'Pendiente',
+            codigo: firstItem ? firstItem.codigo : 'N/A'
+        };
+        
+        const urlCompleta = CONFIG.API_BASE + CONFIG.ENDPOINTS.REGISTRAR_CONFIRMACION;
+        await axios.post(urlCompleta, orderData);
+
+        await say(sock, jid, '🎉 ¡Tu pedido ha sido confirmado! Un agente se contactará contigo para coordinar la entrega. ¡Gracias por tu compra!', ctx);
+        
+        const orderInfoForAdmin = `🆕 NUEVO PEDIDO:\nCliente: ${userSession.order.telefono}\nNombre: ${userSession.order.name}\nDirección: ${userSession.order.address}\nMétodo de pago: ${userSession.order.paymentMethod}\nTotal: ${money(orderTotal)}\n\n*Productos:*\n${summary.text}`;
+        if (CONFIG.ADMIN_JID) {
+            await say(sock, CONFIG.ADMIN_JID, orderInfoForAdmin, ctx);
+        }
+        
+        userSession.order = { items: [] };
+        userSession.phase = PHASE.SELECCION_OPCION;
+
+    } catch (error) {
+        console.error('🔴 ERROR DETALLADO AL ENVIAR A LA API:');
+        if (error.response) {
+            console.error('Datos del error:', error.response.data);
+            console.error('Código de estado:', error.response.status);
+            console.error('Headers:', error.response.headers);
+        } else if (error.request) {
+            console.error('No se recibió respuesta de la API. ¿Está el servidor Django/backend encendido y la URL es correcta?');
+        } else {
+            console.error('Error de configuración de la petición (Axios):', error.message);
+        }
+        
+        logger.error('Error al procesar pedido o enviar a API:', error.message);
+        await say(sock, jid, '⚠️ Ocurrió un error al procesar el pedido. Por favor, contacta directamente con nosotros.', ctx);
+    }
+}
+
+
 module.exports = {
     handleCartSummary,
     handleEnterAddress,
     handleEnterName,
+    handleEnterTelefono,
     handleEnterPaymentMethod,
     handleConfirmOrder,
     validateInput

@@ -13,6 +13,7 @@ const PHASE = {
     // Fases del proceso de pago (Checkout)
     CHECK_DIR: 'check_dir',
     CHECK_NAME: 'check_name',
+    CHECK_TELEFONO: 'check_telefono',
     CHECK_PAGO: 'check_pago',
     CONFIRM_ORDER: 'confirm_order',
 

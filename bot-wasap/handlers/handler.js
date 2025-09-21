@@ -17,6 +17,7 @@ const {
     handleCartSummary,
     handleEnterAddress,
     handleEnterName,
+    handleEnterTelefono,
     handleEnterPaymentMethod,
     handleConfirmOrder,
     validateInput
@@ -175,6 +176,9 @@ async function processIncomingMessage(sock, msg, ctx) {
                 break;
             case PHASE.CHECK_NAME:
                 await handleEnterName(sock, jid, text, userSession, ctx);
+                break;
+            case PHASE.CHECK_TELEFONO:
+                await handleEnterTelefono(sock, jid, text, userSession, ctx);
                 break;
             case PHASE.CHECK_PAGO:
                 await handleEnterPaymentMethod(sock, jid, text, userSession, ctx);

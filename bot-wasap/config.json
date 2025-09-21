@@ -1,10 +1,10 @@
 {
     "ADMIN_JID": "573138777115@s.whatsapp.net",
     "SOCIA_JID": "573138777115@s.whatsapp.net",
-    "API_BASE": "http://127.0.0.1:8001/api",
+    "API_BASE": "http://127.0.0.1:8001",
     "TIME": {
         "MENU_COOLDOWN_MS": 45000,
-        "WRITING_SIMULATION_MS": 1000,
+        "WRITING_SIMULATION_MS": 1,
         "BLOCK_DURATION_MS": 720000
     },
     "QR_IMAGE_PATH": "qr_code.jpg",
@@ -13,8 +13,8 @@
     "GEMINI_API_KEY": "AIzaSyBgsO82-XWugZXX9aAoIIDmLuHLOhlUHXSQ",
     "CONVERSATION_LOG_PATH": "conversations.log",
     "ENDPOINTS": {
-        "REGISTRAR_CONFIRMACION": "/registrar_entrega/",
-        "LISTAR_SABORES_TOPPINGS":  "/consultar_sabores_y_toppings/",
-        "BUSCAR_PRODUCTO": "/buscar_producto_por_nombre/"
+        "REGISTRAR_CONFIRMACION": "/api/registrar_confirmacion/",
+        "LISTAR_SABORES_TOPPINGS": "/api/consultar_sabores_y_toppings/",
+        "BUSCAR_PRODUCTO": "/api/buscar_producto_por_nombre/"
     }
 }
