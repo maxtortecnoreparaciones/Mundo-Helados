@@ -3,12 +3,10 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-// Se importan las funciones correctas que se usan en este archivo
-const { say, sendImage, sleep, handleProductSelection, startEncargoBrowse } = require('../services/bot_core'); 
+const { say, sendImage, handleProductSelection, startEncargoBrowse, sleep } = require('../services/bot_core');
 const { logger } = require('../utils/logger');
-// --- ESTA ES LA LÍNEA QUE FALTABA Y CORRIGE EL ERROR ---
-const { normalizeText } = require('../utils/util'); 
-// ---------------------------------------------------------
+const { normalizeText } = require('../utils/util');
+const { findBestMatch } = require('../services/checkoutHandler');
 const PHASE = require('../utils/phases');
 const CONFIG = require('../config.json');
 
@@ -19,7 +17,24 @@ async function sendMainMenu(sock, jid, ctx) {
 
 async function handleSeleccionOpcion(sock, jid, input, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSeleccionOpcion. Opción: "${input}"`);
-    switch (input) {
+
+    const options = {
+        '1': ['1', 'ver menu', 'hacer pedido', 'comprar', 'productos'],
+        '2': ['2', 'direccion', 'horarios', 'ubicacion'],
+        '3': ['3', 'encargo', 'pedidos grandes', 'eventos']
+    };
+
+    let match = null;
+    const cleanInput = input.toLowerCase().trim();
+
+    for (const key in options) {
+        if (findBestMatch(cleanInput, options[key], 2)) {
+            match = key;
+            break;
+        }
+    }
+
+    switch (match) {
         case '1':
             await say(sock, jid, '📋 ¡Aquí está nuestro delicioso menú del día!', ctx);
             const menuPath1 = path.join(__dirname, '../menu-1.jpeg');
@@ -48,13 +63,27 @@ async function handleSeleccionOpcion(sock, jid, input, userSession, ctx) {
 async function handleBrowseImages(sock, jid, text, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleBrowseImages. Búsqueda: "${text}"`);
     try {
-        const normalizedQuery = normalizeText(text);
+        // Primero, obtenemos la lista completa de productos para poder comparar
+        const inventoryResponse = await axios.get(CONFIG.API_BASE + CONFIG.ENDPOINTS.BUSCAR_PRODUCTO, { params: { q: '' } });
+        const allProductsApi = inventoryResponse.data.matches || [];
+        
+        if (!allProductsApi.length) {
+            await say(sock, jid, '⚠️ No pude cargar el inventario en este momento. Intenta más tarde.', ctx);
+            return;
+        }
+        
+        const productNames = allProductsApi.map(p => p.NombreProducto.toLowerCase());
+
+        // Buscamos la mejor coincidencia para lo que escribió el usuario
+        const bestMatchName = findBestMatch(text, productNames, 3);
+        
+        const query = bestMatchName || text; // Si encontramos una coincidencia, la usamos. Si no, usamos el texto original.
+
         const urlCompleta = CONFIG.API_BASE + CONFIG.ENDPOINTS.BUSCAR_PRODUCTO;
-        const response = await axios.get(urlCompleta, { params: { q: normalizedQuery } });
+        const response = await axios.get(urlCompleta, { params: { q: query } });
         
         let productosApi = response.data.matches || (response.data.CodigoProducto ? [response.data] : []);
 
-        // --- CAMBIO CLAVE: "Traducimos" los datos de la API al formato del bot ---
         const productos = productosApi.map(p => ({
             nombre: p.NombreProducto,
             codigo: p.CodigoProducto,
@@ -65,37 +94,25 @@ async function handleBrowseImages(sock, jid, text, userSession, ctx) {
             sabores: p.sabores,
             toppings: p.toppings
         }));
-        // -----------------------------------------------------------------------
 
         if (productos.length === 1) {
             const producto = productos[0];
             await handleProductSelection(sock, jid, producto, ctx);
-            userSession.currentProduct = producto; // Guardamos el producto ya traducido
-            
+            userSession.currentProduct = producto;
             const numSabores = producto.numero_de_sabores;
             const numToppings = producto.numero_de_toppings;
-
             userSession.phase = (numSabores > 0 || numToppings > 0) ? PHASE.SELECT_DETAILS : PHASE.SELECT_QUANTITY;
             logger.info(`[${jid}] -> Producto único. Nueva fase: ${userSession.phase}`);
-
         } else if (productos.length > 1) {
             userSession.phase = PHASE.SELECCION_PRODUCTO;
-            userSession.lastMatches = productos; // Guardamos los productos ya traducidos
+            userSession.lastMatches = productos;
             const list = productos.slice(0, 10).map((p, i) => `*${i + 1}.* ${p.nombre}`).join('\n');
             await say(sock, jid, `🤔 Encontré varios productos similares:\n${list}\n_Escribe el número del producto que deseas._`, ctx);
         } else {
             await say(sock, jid, `❌ No encontré el producto *"${text}"*.`, ctx);
         }
     } catch (error) {
-        console.error('🔴 ERROR DETALLADO EN LA BÚSQUEDA DE PRODUCTOS:');
-        if (error.response) {
-            console.error('Datos del error:', error.response.data);
-            console.error('Código de estado:', error.response.status);
-        } else if (error.request) {
-            console.error('No se recibió respuesta de la API. ¿Está el servidor Django encendido?');
-        } else {
-            console.error('Error de configuración de la petición:', error.message);
-        }
+        console.error('🔴 ERROR DETALLADO EN LA BÚSQUEDA DE PRODUCTOS:', error.message);
         logger.error('[browse] error:', error.message);
         await say(sock, jid, '⚠️ Error de conexión. Intenta de nuevo.', ctx);
     }

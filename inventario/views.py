@@ -181,6 +181,42 @@ def _norm(text):
 
 def buscar_producto_por_nombre(request):
     query = request.GET.get('q', '').strip()
+    
+    inv_raw = obtener_inventario()
+    if not inv_raw:
+        return JsonResponse({'error': 'No se pudo obtener el inventario.'}, status=500)
+
+    # --- INICIO DE LA CORRECCIÓN ---
+    # Si la búsqueda está vacía, devolvemos todos los productos.
+    if not query:
+        return JsonResponse({'matches': inv_raw})
+    # --- FIN DE LA CORRECCIÓN ---
+
+    sabores_y_toppings_data = obtener_sabores_y_toppings()
+    if not sabores_y_toppings_data:
+        return JsonResponse({'error': 'No se pudieron cargar los sabores y toppings.'}, status=500)
+
+    query_normalized = _norm(query)
+    query_words = query_normalized.split()
+    matched_products = []
+
+    for producto in inv_raw:
+        nombre_normalized = _norm(producto.get('NombreProducto', ''))
+        codigo_normalized = _norm(producto.get('CodigoProducto', ''))
+        
+        if all(word in nombre_normalized for word in query_words) or query_normalized in codigo_normalized:
+            matched_products.append(producto)
+
+    if not matched_products:
+        return JsonResponse({'error': 'Producto no encontrado.'}, status=404)
+    elif len(matched_products) == 1:
+        producto_encontrado = matched_products[0]
+        producto_encontrado['sabores'] = sabores_y_toppings_data.get('sabores', [])
+        producto_encontrado['toppings'] = sabores_y_toppings_data.get('toppings', [])
+        return JsonResponse(producto_encontrado)
+    else:
+        return JsonResponse({'matches': matched_products})
+    query = request.GET.get('q', '').strip()
     if not query:
         return JsonResponse({'error': 'Falta el parámetro de búsqueda "q"'}, status=400)
 
