@@ -139,43 +139,34 @@ async function askGemini(ctx, question) {
 // la cantidad si el producto no tiene opciones. Esto desbloquea la conversación.
 // =================================================================================
 async function handleProductSelection(sock, jid, producto, ctx) {
-    // 1. Guarda el producto actual en la sesión del usuario
+    // Guarda el producto actual (ya "traducido") en la sesión del usuario
     ctx.sessions[jid].currentProduct = producto;
 
-    // 2. Construye el mensaje de respuesta paso a paso
-    let mensaje = `Has seleccionado: *${producto.NombreProducto}* — COP$${money(producto.Precio_Venta)}\n${producto.Descripcion || ''}`;
+    // --- INICIO DE LA CORRECCIÓN ---
+    // Usamos los nombres de campo correctos: `producto.nombre` y `producto.precio`
+    let mensaje = `Has seleccionado: *${producto.nombre}* — ${money(producto.precio)}\n${producto.descripcion || ''}`;
+    // --- FIN DE LA CORRECCIÓN ---
 
-    const numSabores = parseInt(producto.Numero_de_Sabores || 0);
-    const numToppings = parseInt(producto.Numero_de_Toppings || 0);
+    const numSabores = producto.numero_de_sabores;
+    const numToppings = producto.numero_de_toppings;
 
-    // 3. Añade la sección de SABORES si el producto los requiere
     if (numSabores > 0 && ctx.saboresYToppings && ctx.saboresYToppings.sabores) {
         mensaje += `\n\n*Elige ${numSabores} sabor${numSabores > 1 ? 'es' : ''} de la lista (ej: S1, S3):*\n`;
         mensaje += ctx.saboresYToppings.sabores.map((s, i) => `*S${i + 1})* ${s.NombreProducto}`).join('\n');
     }
 
-    // 4. Añade la sección de TOPPINGS si el producto los requiere
     if (numToppings > 0 && ctx.saboresYToppings && ctx.saboresYToppings.toppings) {
         mensaje += `\n\n*Elige hasta ${numToppings} topping${numToppings > 1 ? 's' : ''} (ej: T1, T2):*\n`;
         mensaje += ctx.saboresYToppings.toppings.map((t, i) => `*T${i + 1})* ${t.NombreProducto}`).join('\n');
     }
 
-    // 5. Añade las instrucciones finales
     if (numSabores > 0 || numToppings > 0) {
         mensaje += `\n\n_Para elegir, escribe los códigos separados por comas o espacio (ej: S1, T2). Si no deseas ninguno, escribe **sin nada**._`;
-        // La fase la controla el handler.js, que la pondrá en 'select_details'
     } else {
-        // Si el producto no tiene opciones, preguntamos directamente la cantidad
         mensaje += `\n\n🔢 ¿Cuántas unidades de este producto quieres?`;
-        // El handler.js cambiará la fase a 'select_details'. La lógica en esa fase
-        // deberá ser lo suficientemente inteligente para saltar a 'select_quantity'.
-        // O mejor aún, el handler puede manejar esto. Por ahora, esto desbloquea la conversación.
     }
 
-    // 6. Envía el mensaje completo al usuario
     await say(sock, jid, mensaje, ctx);
-
-    // CAMBIO 3: La función `addToCart` duplicada que estaba aquí ha sido eliminada.
 }
 
 

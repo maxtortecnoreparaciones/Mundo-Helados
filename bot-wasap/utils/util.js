@@ -5,7 +5,8 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function normalizarMensaje(text) {
+// CAMBIO 1: Se renombra la función para que coincida con lo que se importa
+function normalizeText(text) {
     if (typeof text !== 'string') return '';
     return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 }
@@ -28,7 +29,8 @@ function parsePrice(price) {
 
 function parseProductAndQuantity(text) {
     const defaultQuantity = 1;
-    const tokens = normalizarMensaje(text).split(' ');
+    // Se actualiza para usar el nuevo nombre de la función
+    const tokens = normalizeText(text).split(' '); 
     let quantity = defaultQuantity;
     let productName = text;
 
@@ -48,9 +50,8 @@ async function getDeliveryCost(address) {
     try {
         const response = await axios.get(CONFIG.API_BASE + '/' + CONFIG.ENDPOINTS.DELIVERY_COST, {
             params: { q: address },
-            timeout: 10000 
+            timeout: 10000
         });
-
         if (response.data && response.data.costo) {
             return parsePrice(response.data.costo);
         } else {
@@ -74,7 +75,8 @@ function wantsMenu(t) {
 
 module.exports = {
     sleep,
-    normalizarMensaje,
+    // CAMBIO 2: Se exporta la función con el nombre correcto
+    normalizeText, 
     money,
     parsePrice,
     parseProductAndQuantity,
