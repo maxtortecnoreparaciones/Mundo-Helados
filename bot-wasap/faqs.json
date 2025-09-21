@@ -1,0 +1,19 @@
+[
+  {
+    "keywords": ["horario", "horas", "abren", "cierran"],
+    "answer": "Nuestro horario de atención es de 2:00 PM a 10:00 PM, todos los días. ¡Te esperamos! ✨"
+  },
+  {
+    "keywords": ["domicilio", "entrega", "envio", "delivery"],
+    "answer": "Sí, hacemos domicilios en Riohacha. El costo de envío se calculará al finalizar tu pedido. 🛵"
+  },
+  {
+    "keywords": ["ubicacion", "direccion", "donde estan"],
+    "answer": "Nuestra dirección es Cra 7h n 34 b 08. ¡Ven a visitarnos! 📍"
+  },
+  {
+    "keywords": ["pagar", "pago", "nequi", "bancolombia"],
+    "answer": "Aceptamos pagos en efectivo o por transferencia a través de Nequi y Bancolombia. 💳"
+  }
+ 
+]

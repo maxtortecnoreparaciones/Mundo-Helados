@@ -1,8 +1,31 @@
-﻿# Archivos de la sesión de WhatsApp
-baileys_auth/
+﻿# Archivo .gitignore - Versión Definitiva
 
-# Módulos y dependencias
-node_modules/
+# Dependencias de Node.js
+/node_modules
 
-# Archivo con la credencial de Google Cloud
+# Variables de Entorno y Claves
+.env
 service_account.json
+
+# Archivos de Sesión de Baileys (en cualquier carpeta)
+**/auth_info_baileys.json
+**/creds.json
+**/*.json.bak
+
+# Archivos de sesión específicos de Baileys (la regla clave)
+**/sender-key-*.json
+**/session-*.json
+**/pre-key-*.json
+**/sender-key-status@*.json
+
+# Logs
+*.log
+
+# Python / Django
+__pycache__/
+*.pyc
+db.sqlite3
+
+# Archivos del Sistema Operativo
+.DS_Store
+Thumbs.db

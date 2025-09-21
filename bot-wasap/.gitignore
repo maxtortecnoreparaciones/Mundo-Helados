@@ -1,0 +1,22 @@
+# Dependencias
+/node_modules
+
+# Archivos de Sesión de Baileys (MUY IMPORTANTE)
+/auth_info_baileys.json
+**/auth_info_baileys.json
+
+# Variables de Entorno (NUNCA SUBAS TUS SECRETOS)
+.env
+
+# Logs y Archivos de Depuración
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos del Sistema Operativo
+.DS_Store
+Thumbs.db
+
+# Claves de Servicios de Google
+service_account.json
