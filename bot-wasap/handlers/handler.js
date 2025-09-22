@@ -108,9 +108,10 @@ async function processIncomingMessage(sock, msg, ctx) {
                 await handleEncargo(sock, jid, t, userSession, ctx);
                 break;
             default:
-                logger.warn(`[${jid}] -> Fase inesperada: "${userSession.phase}".`);
-                await say(sock, jid, '⚠️ Ocurrió un error. Escribe "menú" para volver al inicio.', ctx);
-                break;
+            // Si el bot está en una fase que no existe o no sabe qué hacer,
+            // llamamos a la IA como último recurso.
+            await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
+            break;
         }
     } catch (error) {
         console.error('Error al procesar mensaje:', error);
@@ -122,6 +123,36 @@ async function processIncomingMessage(sock, msg, ctx) {
 // ==========================================================
 // --- FUNCIONES RESTAURADAS QUE FALTABAN EN VERSIONES ANTERIORES ---
 // ==========================================================
+
+// AÑADE ESTA NUEVA FUNCIÓN A TU ARCHIVO
+async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
+    logger.info(`[${jid}] -> No se reconoció el input, consultando a Gemini: "${text}"`);
+    const jsonResponse = await askGemini(ctx, text);
+
+    if (!jsonResponse) {
+        await say(sock, jid, 'Lo siento, no pude procesar tu mensaje. Intenta de nuevo.', ctx);
+        return;
+    }
+
+    try {
+        const orderInfo = JSON.parse(jsonResponse);
+
+        if (orderInfo && orderInfo.respuesta_texto) {
+            await say(sock, jid, orderInfo.respuesta_texto, ctx);
+        } else if (orderInfo && orderInfo.items && orderInfo.items.length > 0) {
+            const firstItem = orderInfo.items[0];
+            if (firstItem.modificaciones && firstItem.modificaciones.length > 0) {
+                userSession.order.notes = (userSession.order.notes || []).concat(firstItem.modificaciones);
+            }
+            await handleBrowseImages(sock, jid, firstItem.producto, userSession, ctx);
+        } else {
+            await say(sock, jid, 'No estoy seguro de cómo ayudarte. Escribe *menú* para ver las opciones.', ctx);
+        }
+    } catch (e) {
+        logger.error(`[${jid}] -> Error al procesar JSON de Gemini: ${e.message}`);
+        await say(sock, jid, 'No pude procesar esa petición. Escribe "menú" para ver las opciones.', ctx);
+    }
+}
 
 async function handleSeleccionProducto(sock, jid, input, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSeleccionProducto. Selección: "${input}"`);
