@@ -1,8 +1,8 @@
 'use strict';
 
 const { isGreeting, wantsMenu, money, normalizeText } = require('../utils/util');
-const { say, resetChat, addToCart, handleProductSelection, askGemini } = require('../services/bot_core');
-const { handleCartSummary, handleEnterAddress, handleEnterName, handleEnterTelefono, handleEnterPaymentMethod, handleConfirmOrder, validateInput } = require('../services/checkoutHandler');
+const { say, resetChat, addToCart, askGemini, handleProductSelection } = require('../services/bot_core');
+const { handleCartSummary, handleEnterAddress, handleEnterName, handleEnterTelefono, handleEnterPaymentMethod, handleConfirmOrder, validateInput, findBestMatch } = require('../services/checkoutHandler');
 const { sendMainMenu, handleSeleccionOpcion, handleBrowseImages } = require('./menuHandler');
 const { logConversation, logUserError, logger } = require('../utils/logger');
 const PHASE = require('../utils/phases');
@@ -35,6 +35,41 @@ function initializeUserSession(jid, ctx) {
     return ctx.sessions[jid];
 }
 
+// =================================================================================
+// NUEVA FUNCIÓN: handleNaturalLanguageOrder
+// Esta es la función que habla con Gemini para entender pedidos o preguntas.
+// =================================================================================
+async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
+    logger.info(`[${jid}] -> No se reconoció el input, consultando a Gemini: "${text}"`);
+    const jsonResponse = await askGemini(ctx, text);
+
+    if (!jsonResponse) {
+        await say(sock, jid, 'Lo siento, no pude procesar tu mensaje. Intenta de nuevo.', ctx);
+        return;
+    }
+
+    try {
+        const orderInfo = JSON.parse(jsonResponse);
+        
+        if (orderInfo && orderInfo.respuesta_texto) {
+            await say(sock, jid, orderInfo.respuesta_texto, ctx);
+        } else if (orderInfo && orderInfo.items && orderInfo.items.length > 0) {
+            // Por ahora, procesamos el primer item que encuentre la IA
+            const firstItem = orderInfo.items[0];
+            if (firstItem.modificaciones && firstItem.modificaciones.length > 0) {
+                userSession.order.notes = (userSession.order.notes || []).concat(firstItem.modificaciones);
+            }
+            await handleBrowseImages(sock, jid, firstItem.producto, userSession, ctx);
+        } else {
+            // Mensaje final si ni el bot ni Gemini entendieron.
+            await say(sock, jid, 'No estoy seguro de cómo ayudarte con eso. Escribe *menú* para ver las opciones que tengo.', ctx);
+        }
+    } catch (e) {
+        logger.error(`[${jid}] -> Error al procesar JSON de Gemini: ${e.message}`);
+        await say(sock, jid, 'No pude procesar esa petición. Intenta escribiendo "menú".', ctx);
+    }
+}
+
 async function processIncomingMessage(sock, msg, ctx) {
     try {
         const { from, text, key } = msg;
@@ -51,35 +86,42 @@ async function processIncomingMessage(sock, msg, ctx) {
         userSession.lastPromptAt = Date.now();
         logger.info(`[${jid}] -> Fase actual: ${userSession.phase}. Mensaje recibido: "${text}"`);
 
-        if (isGreeting(t)) {
+        if (isGreeting(t) || wantsMenu(t)) {
             resetChat(jid, ctx);
             await sendMainMenu(sock, jid, ctx);
             return;
         }
 
-        if (wantsMenu(t) || (userSession.phase === PHASE.BROWSE_IMAGES && t === '3')) {
-            resetChat(jid, ctx);
-            await sendMainMenu(sock, jid, ctx);
-            return;
-        }
-        
-        if (t === 'pagar' || t === 'carrito' || t === 'ver carrito' || (userSession.phase === PHASE.BROWSE_IMAGES && t === '1')) {
-            await handleCartSummary(sock, jid, userSession, ctx);
-            return;
-        }
-        
-        if (userSession.phase === PHASE.BROWSE_IMAGES && t === '2') {
-            await say(sock, jid, '¡Perfecto! Escribe el nombre del siguiente producto que deseas añadir.', ctx);
-            return;
-        }
-        
         switch (userSession.phase) {
             case PHASE.SELECCION_OPCION:
-                await handleSeleccionOpcion(sock, jid, t, userSession, ctx);
+                const menuOptions = ['1', '2', '3'];
+                const isMenuOption = menuOptions.includes(t) || findBestMatch(t, ['ver menu', 'direccion', 'encargo']);
+                
+                if (isMenuOption) {
+                    await handleSeleccionOpcion(sock, jid, t, userSession, ctx);
+                } else {
+                    await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
+                }
                 break;
+            
             case PHASE.BROWSE_IMAGES:
-                await handleBrowseImages(sock, jid, t, userSession, ctx);
+                const postAddOptions = ['1', '2', '3', 'pagar', 'carrito', 'menu'];
+                const isPostAddOption = findBestMatch(t, postAddOptions);
+
+                if (isPostAddOption) {
+                    if (isPostAddOption === '1' || isPostAddOption === 'pagar' || isPostAddOption === 'carrito') {
+                        await handleCartSummary(sock, jid, userSession, ctx);
+                    } else if (isPostAddOption === '2') {
+                        await say(sock, jid, '¡Perfecto! Escribe el nombre del siguiente producto que deseas añadir.', ctx);
+                    } else if (isPostAddOption === '3' || isPostAddOption === 'menu') {
+                        resetChat(jid, ctx);
+                        await sendMainMenu(sock, jid, ctx);
+                    }
+                } else {
+                    await handleBrowseImages(sock, jid, t, userSession, ctx);
+                }
                 break;
+
             case PHASE.SELECCION_PRODUCTO:
                 await handleSeleccionProducto(sock, jid, t, userSession, ctx);
                 break;
@@ -107,52 +149,18 @@ async function processIncomingMessage(sock, msg, ctx) {
             case PHASE.ENCARGO:
                 await handleEncargo(sock, jid, t, userSession, ctx);
                 break;
+
             default:
-            // Si el bot está en una fase que no existe o no sabe qué hacer,
-            // llamamos a la IA como último recurso.
-            await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
-            break;
+                await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
+                break;
         }
     } catch (error) {
         console.error('Error al procesar mensaje:', error);
         logUserError(msg.from, 'main_handler', msg.text, error.stack);
-        await say(sock, msg.from, '⚠️ Ocurrió un error. Por favor, intenta de nuevo o escribe "menu" para volver al inicio.', ctx);
+        await say(sock, msg.from, '⚠️ Ocurrió un error. Por favor, intenta de nuevo.', ctx);
     }
 }
 
-// ==========================================================
-// --- FUNCIONES RESTAURADAS QUE FALTABAN EN VERSIONES ANTERIORES ---
-// ==========================================================
-
-// AÑADE ESTA NUEVA FUNCIÓN A TU ARCHIVO
-async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
-    logger.info(`[${jid}] -> No se reconoció el input, consultando a Gemini: "${text}"`);
-    const jsonResponse = await askGemini(ctx, text);
-
-    if (!jsonResponse) {
-        await say(sock, jid, 'Lo siento, no pude procesar tu mensaje. Intenta de nuevo.', ctx);
-        return;
-    }
-
-    try {
-        const orderInfo = JSON.parse(jsonResponse);
-
-        if (orderInfo && orderInfo.respuesta_texto) {
-            await say(sock, jid, orderInfo.respuesta_texto, ctx);
-        } else if (orderInfo && orderInfo.items && orderInfo.items.length > 0) {
-            const firstItem = orderInfo.items[0];
-            if (firstItem.modificaciones && firstItem.modificaciones.length > 0) {
-                userSession.order.notes = (userSession.order.notes || []).concat(firstItem.modificaciones);
-            }
-            await handleBrowseImages(sock, jid, firstItem.producto, userSession, ctx);
-        } else {
-            await say(sock, jid, 'No estoy seguro de cómo ayudarte. Escribe *menú* para ver las opciones.', ctx);
-        }
-    } catch (e) {
-        logger.error(`[${jid}] -> Error al procesar JSON de Gemini: ${e.message}`);
-        await say(sock, jid, 'No pude procesar esa petición. Escribe "menú" para ver las opciones.', ctx);
-    }
-}
 
 async function handleSeleccionProducto(sock, jid, input, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSeleccionProducto. Selección: "${input}"`);
@@ -168,8 +176,7 @@ async function handleSeleccionProducto(sock, jid, input, userSession, ctx) {
 
 async function handleSelectDetails(sock, jid, input, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSelectDetails. Input: "${input}"`);
-    // Aquí va tu lógica completa para seleccionar sabores y toppings
-    // Por ahora, es un marcador de posición que avanza a la siguiente fase
+    // Tu lógica para seleccionar sabores y toppings va aquí
     await say(sock, jid, '🔢 ¿Cuántas unidades de este producto quieres?', ctx);
     userSession.phase = PHASE.SELECT_QUANTITY;
 }
@@ -177,7 +184,7 @@ async function handleSelectDetails(sock, jid, input, userSession, ctx) {
 async function handleSelectQuantity(sock, jid, cleanedText, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSelectQuantity. Cantidad: "${cleanedText}"`);
     if (!userSession.currentProduct) {
-        await say(sock, jid, '⚠️ Ocurrió un error, no se encontró el producto. Volviendo al menú.', ctx);
+        await say(sock, jid, '⚠️ Ocurrió un error, no se encontró el producto.', ctx);
         resetChat(jid, ctx);
         return;
     }
@@ -201,7 +208,7 @@ async function handleSelectQuantity(sock, jid, cleanedText, userSession, ctx) {
     await say(sock, jid, `✅ ¡Agregado! *${quantity}x* ${userSession.currentProduct.nombre} - *${money(totalPrice)}*`, ctx);
 
     userSession.phase = PHASE.BROWSE_IMAGES;
-    const nextStepMessage = `¿Qué deseas hacer ahora?\n\n*1)* 🛒 Ver mi pedido y pagar (*escribe 1 o pagar*)\n*2)* 🍨 Añadir otro producto (*escribe el nombre*)\n*3)* 📋 Volver al menú principal (*escribe 3 o menú*)\n\n_Responde con un número o una palabra clave._`;
+    const nextStepMessage = `¿Qué deseas hacer ahora?\n\n*1)* 🛒 Ver mi pedido y pagar\n*2)* 🍨 Añadir otro producto\n*3)* 📋 Volver al menú principal\n\n_Responde con un número o una palabra clave._`;
     await say(sock, jid, nextStepMessage, ctx);
 }
 
@@ -212,10 +219,6 @@ async function handleEncargo(sock, jid, input, userSession, ctx) {
     }
     resetChat(jid, ctx);
 }
-
-// ==========================================================
-// --- FUNCIONES DE ARRANQUE QUE FALTABAN ---
-// ==========================================================
 
 function setupSocketHandlers(sock, ctx) {
     sock.ev.on('messages.upsert', async ({ messages }) => {
@@ -264,7 +267,7 @@ function initializeBotContext() {
         sessions: {},
         botEnabled: true,
         startTime: Date.now(),
-        version: '3.0.0' // Versión final
+        version: '3.1.0'
     };
     logger.info('✅ Contexto del bot inicializado.');
     return ctx;
