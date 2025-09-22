@@ -1,7 +1,7 @@
 'use strict';
 
-const { isGreeting, wantsMenu, money } = require('../utils/util');
-const { say, resetChat, addToCart } = require('../services/bot_core');
+const { isGreeting, wantsMenu, money, normalizeText } = require('../utils/util');
+const { say, resetChat, addToCart, handleProductSelection, askGemini } = require('../services/bot_core');
 const { handleCartSummary, handleEnterAddress, handleEnterName, handleEnterTelefono, handleEnterPaymentMethod, handleConfirmOrder, validateInput } = require('../services/checkoutHandler');
 const { sendMainMenu, handleSeleccionOpcion, handleBrowseImages } = require('./menuHandler');
 const { logConversation, logUserError, logger } = require('../utils/logger');
@@ -51,18 +51,28 @@ async function processIncomingMessage(sock, msg, ctx) {
         userSession.lastPromptAt = Date.now();
         logger.info(`[${jid}] -> Fase actual: ${userSession.phase}. Mensaje recibido: "${text}"`);
 
-        if (isGreeting(t) || wantsMenu(t)) {
+        if (isGreeting(t)) {
             resetChat(jid, ctx);
             await sendMainMenu(sock, jid, ctx);
-            userSession.phase = PHASE.SELECCION_OPCION;
             return;
         }
 
-        if (t === 'pagar' || t === 'carrito' || t === 'ver carrito') {
+        if (wantsMenu(t) || (userSession.phase === PHASE.BROWSE_IMAGES && t === '3')) {
+            resetChat(jid, ctx);
+            await sendMainMenu(sock, jid, ctx);
+            return;
+        }
+        
+        if (t === 'pagar' || t === 'carrito' || t === 'ver carrito' || (userSession.phase === PHASE.BROWSE_IMAGES && t === '1')) {
             await handleCartSummary(sock, jid, userSession, ctx);
             return;
         }
-
+        
+        if (userSession.phase === PHASE.BROWSE_IMAGES && t === '2') {
+            await say(sock, jid, '¡Perfecto! Escribe el nombre del siguiente producto que deseas añadir.', ctx);
+            return;
+        }
+        
         switch (userSession.phase) {
             case PHASE.SELECCION_OPCION:
                 await handleSeleccionOpcion(sock, jid, t, userSession, ctx);
@@ -105,8 +115,13 @@ async function processIncomingMessage(sock, msg, ctx) {
     } catch (error) {
         console.error('Error al procesar mensaje:', error);
         logUserError(msg.from, 'main_handler', msg.text, error.stack);
+        await say(sock, msg.from, '⚠️ Ocurrió un error. Por favor, intenta de nuevo o escribe "menu" para volver al inicio.', ctx);
     }
 }
+
+// ==========================================================
+// --- FUNCIONES RESTAURADAS QUE FALTABAN EN VERSIONES ANTERIORES ---
+// ==========================================================
 
 async function handleSeleccionProducto(sock, jid, input, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSeleccionProducto. Selección: "${input}"`);
@@ -122,7 +137,8 @@ async function handleSeleccionProducto(sock, jid, input, userSession, ctx) {
 
 async function handleSelectDetails(sock, jid, input, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSelectDetails. Input: "${input}"`);
-    // (Tu lógica para seleccionar sabores y toppings va aquí)
+    // Aquí va tu lógica completa para seleccionar sabores y toppings
+    // Por ahora, es un marcador de posición que avanza a la siguiente fase
     await say(sock, jid, '🔢 ¿Cuántas unidades de este producto quieres?', ctx);
     userSession.phase = PHASE.SELECT_QUANTITY;
 }
@@ -134,33 +150,28 @@ async function handleSelectQuantity(sock, jid, cleanedText, userSession, ctx) {
         resetChat(jid, ctx);
         return;
     }
-
     const quantity = parseInt(cleanedText);
     if (!validateInput(cleanedText, 'number', { max: 50 })) {
         await say(sock, jid, '❌ Por favor, escribe un número válido entre 1 y 50.', ctx);
         return;
     }
 
-    // --- INICIO DE LA CORRECCIÓN ---
-    // Creamos un objeto limpio para el carrito, usando únicamente
-    // los sabores y toppings que el usuario seleccionó.
-    // Si no seleccionó ninguno, las listas estarán vacías, que es lo correcto.
     const productToAdd = {
         codigo: userSession.currentProduct.codigo,
         nombre: userSession.currentProduct.nombre,
         precio: userSession.currentProduct.precio,
-        sabores: userSession.saboresSeleccionados || [], // Asegura que sea un array
-        toppings: userSession.toppingsSeleccionados || [], // Asegura que sea un array
+        sabores: userSession.saboresSeleccionados || [],
+        toppings: userSession.toppingsSeleccionados || [],
     };
 
     addToCart(ctx, jid, productToAdd, quantity);
-    // --- FIN DE LA CORRECCIÓN ---
 
     const totalPrice = userSession.currentProduct.precio * quantity;
     await say(sock, jid, `✅ ¡Agregado! *${quantity}x* ${userSession.currentProduct.nombre} - *${money(totalPrice)}*`, ctx);
 
     userSession.phase = PHASE.BROWSE_IMAGES;
-    await say(sock, jid, `¿Qué deseas hacer ahora?\n\n🛒 Escribe *carrito* o *pagar*\n🍨 Escribe el nombre de otro producto\n📋 Escribe *menú* para volver al inicio`, ctx);
+    const nextStepMessage = `¿Qué deseas hacer ahora?\n\n*1)* 🛒 Ver mi pedido y pagar (*escribe 1 o pagar*)\n*2)* 🍨 Añadir otro producto (*escribe el nombre*)\n*3)* 📋 Volver al menú principal (*escribe 3 o menú*)\n\n_Responde con un número o una palabra clave._`;
+    await say(sock, jid, nextStepMessage, ctx);
 }
 
 async function handleEncargo(sock, jid, input, userSession, ctx) {
@@ -170,6 +181,10 @@ async function handleEncargo(sock, jid, input, userSession, ctx) {
     }
     resetChat(jid, ctx);
 }
+
+// ==========================================================
+// --- FUNCIONES DE ARRANQUE QUE FALTABAN ---
+// ==========================================================
 
 function setupSocketHandlers(sock, ctx) {
     sock.ev.on('messages.upsert', async ({ messages }) => {
@@ -181,10 +196,7 @@ function setupSocketHandlers(sock, ctx) {
                 key: msg.key
             };
             if (!messageData.text || !messageData.text.trim()) continue;
-            processIncomingMessage(sock, messageData, ctx).catch(error => {
-                logger.error('❌ Error crítico al procesar mensaje:', error);
-                logUserError(messageData.from, 'main_handler', messageData.text, error.stack);
-            });
+            processIncomingMessage(sock, messageData, ctx);
         }
     });
 
@@ -221,7 +233,7 @@ function initializeBotContext() {
         sessions: {},
         botEnabled: true,
         startTime: Date.now(),
-        version: '2.2.0'
+        version: '3.0.0' // Versión final
     };
     logger.info('✅ Contexto del bot inicializado.');
     return ctx;

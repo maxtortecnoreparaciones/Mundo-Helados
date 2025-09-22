@@ -16,5 +16,23 @@
         "REGISTRAR_CONFIRMACION": "/api/registrar_confirmacion/",
         "LISTAR_SABORES_TOPPINGS": "/api/consultar_sabores_y_toppings/",
         "BUSCAR_PRODUCTO": "/api/buscar_producto_por_nombre/"
+    },
+    "KEYWORDS": {
+        "GREETINGS": [
+            "hola",
+            "holas",
+            "buenas",
+            "hi",
+            "hey",
+            "hello",
+            "que mas"
+        ],
+        "MENU_REQUESTS": [
+            "menu",
+            "catalogo",
+            "carta",
+            "productos",
+            "quiero comprar"
+        ]
     }
 }

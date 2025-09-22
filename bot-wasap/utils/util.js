@@ -1,3 +1,5 @@
+'use strict';
+
 const axios = require('axios');
 const CONFIG = require('../config.json');
 
@@ -5,13 +7,13 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// CAMBIO 1: Se renombra la función para que coincida con lo que se importa
 function normalizeText(text) {
     if (typeof text !== 'string') return '';
     return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 }
 
 function money(number) {
+    if (isNaN(number)) return '$ 0';
     return new Intl.NumberFormat('es-CO', {
         style: 'currency',
         currency: 'COP',
@@ -29,7 +31,6 @@ function parsePrice(price) {
 
 function parseProductAndQuantity(text) {
     const defaultQuantity = 1;
-    // Se actualiza para usar el nuevo nombre de la función
     const tokens = normalizeText(text).split(' '); 
     let quantity = defaultQuantity;
     let productName = text;
@@ -48,9 +49,10 @@ function parseProductAndQuantity(text) {
 
 async function getDeliveryCost(address) {
     try {
-        const response = await axios.get(CONFIG.API_BASE + '/' + CONFIG.ENDPOINTS.DELIVERY_COST, {
+        const urlCompleta = CONFIG.API_BASE + CONFIG.ENDPOINTS.DELIVERY_COST;
+        const response = await axios.get(urlCompleta, {
             params: { q: address },
-            timeout: 10000
+            timeout: 10000 
         });
         if (response.data && response.data.costo) {
             return parsePrice(response.data.costo);
@@ -64,18 +66,17 @@ async function getDeliveryCost(address) {
 }
 
 function isGreeting(t) {
-    const greetings = ['hola', 'holas', 'buenas', 'hi', 'hey', 'hello', 'que mas'];
+    const greetings = CONFIG.KEYWORDS.GREETINGS;
     return greetings.some(greeting => t.includes(greeting));
 }
 
 function wantsMenu(t) {
-    const menuRequests = ['menu', 'catalogo', 'carta', 'productos', 'quiero comprar'];
+    const menuRequests = CONFIG.KEYWORDS.MENU_REQUESTS;
     return menuRequests.some(request => t.includes(request));
 }
 
 module.exports = {
     sleep,
-    // CAMBIO 2: Se exporta la función con el nombre correcto
     normalizeText, 
     money,
     parsePrice,

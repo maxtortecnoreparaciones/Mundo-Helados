@@ -83,7 +83,7 @@ const startBot = async () => {
             }
         } else if (connection === 'open') {
             console.log('✅ Conectado como', sock.user.id);
-            await say(sock, sock.user.id, `Hola, ¡el bot se ha iniciado con éxito! ✅...`, ctx);
+           // await say(sock, sock.user.id, `Hola, ¡el bot se ha iniciado con éxito! ✅...`, ctx);
         }
     });
 
