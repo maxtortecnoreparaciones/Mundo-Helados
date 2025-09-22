@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const { logConversation } = require('../utils/logger');
-const { sleep, money } = require('../utils/util');
+const { sleep, money, normalizeText } = require('../utils/util');
 
 const CONFIG = require('../config.json');
 
@@ -105,30 +105,63 @@ async function sendImage(sock, jid, imagePath, caption, ctx) {
 }
 
 async function askGemini(ctx, question) {
-    // Tu función askGemini no necesita cambios
+    if (!ctx.gemini) {
+        console.error("Error: Cliente de Gemini no inicializado en el contexto.");
+        return null;
+    }
     const model = ctx.gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const prompt = `Eres un asistente de ventas muy amigable y experto en helados. Responde la siguiente pregunta o comentario como si fueras el bot de heladería 'Mundo Helados' en Riohacha. Mantén tus respuestas concisas y amigables. No menciones que eres una IA. Si te preguntan algo fuera de helados o la heladería, responde de forma educada que tu especialidad es el helado.
     
-    Ejemplo de preguntas y respuestas:
-    - Pregunta: "jajaja a dormir puesss"
-    - Respuesta: "¡Que tengas una excelente noche! ✨ Cuando estés listo para tu helado, solo escribe *menú*."
+    const prompt = `
+        Eres un asistente experto y amigable para la heladería "Mundo Helados".
+        Tu tarea principal es tomar pedidos, pero también debes responder preguntas comunes sobre el negocio.
 
-    - Pregunta: "cuanto valen las fresas"
-    - Respuesta: "Las fresas frescas (topping T1) no tienen costo adicional."
+        ---
+        TAREA 1: TOMAR PEDIDOS
+        Si la petición del cliente parece ser un pedido, extráelo en formato JSON.
+        - "producto": El nombre del producto principal.
+        - "cantidad": El número de unidades (por defecto es 1).
+        - "modificaciones": Una lista de cambios especiales.
+        Si no es un pedido, pon "producto": null.
 
-    - Pregunta: "horarios, no analiza la conversacion por que sigue sin responder varias preguntas"
-    - Respuesta: "¡Lo siento! Estoy aprendiendo a mejorar mi conversación. Para saber nuestros horarios, la dirección es *Cra 7h n 34 b 08* y el horario de atención es de 2:00 PM a 10:00 PM todos los días."
+        Ejemplos de Pedidos:
+        - Petición: "una ensalada sin papaya" -> JSON: {"producto": "Ensalada de frutas", "cantidad": 1, "modificaciones": ["sin papaya"]}
+        - Petición: "quiero 2 malteadas ferrero" -> JSON: {"producto": "Malteada Especial", "cantidad": 2, "modificaciones": ["sabor Ferrero"]}
+        
+        ---
+        TAREA 2: RESPONDER PREGUNTAS FRECUENTES (FAQ)
+        Si la petición del cliente es una pregunta, usa la siguiente información para dar una respuesta corta y amigable. Si la respuesta no está aquí, di que no tienes esa información.
 
-    Pregunta/Comentario del cliente: "${question}"
-    
-    Respuesta:`;
+        **FAQ de Mundo Helados:**
+        - **¿Tienen sabor Ferrero?** Sí, está disponible en nuestra Malteada Especial. Pídela como "Malteada Especial".
+        - **¿Aceptan tarjeta de crédito?** Por el momento solo aceptamos pagos en Efectivo o por Transferencia (Nequi).
+        - **¿Cuánto demora el domicilio?** El domicilio normalmente tarda entre 20 y 40 minutos, dependiendo de tu ubicación y del tráfico.
+        - **¿Tienen helado de pistacho?** No, actualmente no manejamos helado de pistacho.
+        - **¿Cuál es la dirección?** Estamos en la Cra 7h n 34 b 08.
+        - **¿Cuál es el horario?** Abrimos todos los días de 2:00 PM a 10:00 PM.
+
+        ---
+
+        Analiza la siguiente petición del cliente. Si es un pedido, devuelve el JSON. Si es una pregunta, responde basándote en la FAQ.
+        
+        Petición del cliente: "${question}"
+    `;
+
     try {
         const result = await model.generateContent(prompt);
         const response = await result.response;
-        return response.text();
+        let textResponse = response.text().trim();
+
+        // Verificamos si la respuesta es un JSON de pedido o una respuesta de texto
+        if (textResponse.startsWith('{')) {
+            const jsonText = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+            return jsonText; // Devolvemos el JSON para que el bot lo procese
+        } else {
+            // Si es una respuesta de texto, la envolvemos en un formato que el bot pueda manejar
+            return JSON.stringify({ "producto": null, "respuesta_faq": textResponse });
+        }
     } catch (error) {
         console.error("Error al interactuar con la API de Gemini:", error.message);
-        return "¡Uy! Parece que mis circuitos se enredaron. 😅 Por favor, intenta de nuevo.";
+        return null;
     }
 }
 

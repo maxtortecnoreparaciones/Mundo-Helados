@@ -1,0 +1,17 @@
+[33m5c72d93[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mactualizacion-backend[m[33m, [m[1;31morigin/actualizacion-backend[m[33m)[m fix: Flexibiliza la API para permitir búsquedas vacías
+[33m3dde5fe[m fix: Unifica el formato de datos del producto y corrige bugs finales modularizacion flujo
+[33m0718332[m fix: Importa correctamente el manejador de teléfono y entrega
+[33me5ddb4c[m fix: Corrige bucle al seleccionar cantidad en productos sin opciones
+[33m0b7cb2b[m chore: Actualiza .gitignore y limpia archivos de sesión
+[33mb955ca6[m feat: Integra backend Django y limpia historial
+[33md002e9e[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge branch 'main' of https://github.com/maxtortecnoreparaciones/Mundo-Helados
+[33m3aa5a8b[m fix: Excluye archivos de sesión y secretos del repositorio
+[33m375f7fb[m Update README.md
+[33mecd0aab[m Merge branch 'main' of https://github.com/maxtortecnoreparaciones/Mundo-Helados
+[33m57bfa9d[m ultimamodularizacion
+[33m7ab8c9c[m actualizacionflujomodular
+[33m746b4af[m modularizacion
+[33mb9b76cf[m final
+[33m170d846[m mejoraslogica
+[33ma9dbaec[m Create README.md
+[33mfb36a2a[m Commit inicial limpio y sin secretos
