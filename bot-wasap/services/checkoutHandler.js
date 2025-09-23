@@ -77,7 +77,7 @@ async function handleCartSummary(sock, jid, userSession, ctx) {
     const summary = generateCartSummary(userSession);
     const summaryMessage = `📝 *Este es tu pedido actual:*\n\n${summary.text}\n\n*Total del pedido: ${money(summary.total)}*`;
     await say(sock, jid, summaryMessage, ctx);
-    const addressPrompt = `Para continuar con el envío, por favor, escribe tu *dirección completa*.`;
+    const addressPrompt = `Para continuar con el envío, por favor, escribe tu *dirección completa* o escribe *reservar* para si vienes al negocio, recuerda debes pagarla para que se aliste.`;
     await say(sock, jid, addressPrompt, ctx);
     userSession.phase = PHASE.CHECK_DIR;
     logger.info(`[${jid}] -> Carrito mostrado. Pasando a la fase de solicitar dirección: ${userSession.phase}`);
@@ -138,18 +138,18 @@ async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
     userSession.order.paymentMethod = paymentMethod;
     userSession.errorCount = 0;
     if (paymentMethod === 'transferencia') {
-        const qrPath = path.join(__dirname, '../qr.png');
+        const qrPath = path.join(__dirname, 'qr_code.jpg');
         if (fs.existsSync(qrPath)) {
-            await sendImage(sock, jid, qrPath, 'Escanea el siguiente código QR para realizar el pago...', ctx);
+            await sendImage(sock, jid, qrPath, 'Escanea el siguiente código QR para realizar el pago...Recuerda enviarnos el comprobante.', ctx);
         } else {
-            await say(sock, jid, 'Realiza el pago a Nequi 123456789...', ctx);
+            await say(sock, jid, 'Realiza el pago a Nequi 3136939636...', ctx);
         }
     }
     userSession.phase = PHASE.CONFIRM_ORDER;
     const summary = generateCartSummary(userSession);
     userSession.order.deliveryCost = 0;
     const orderTotal = summary.total + (userSession.order.deliveryCost || 0);
-    const summaryText = `📝 *Resumen final del pedido*\n\n*Productos:*\n${summary.text}\n\nSubtotal: ${money(summary.total)}\nDomicilio: ${money(userSession.order.deliveryCost)}\n*Total a pagar: ${money(orderTotal)}*\n\n*Datos de entrega:*\n👤 Nombre: ${userSession.order.name}\n📞 Teléfono: ${userSession.order.telefono}\n🏠 Dirección: ${userSession.order.address}\n💳 Pago: ${userSession.order.paymentMethod}\n\n¿Está todo correcto?\nEscribe *confirmar* para finalizar o *editar*.`;
+    const summaryText = `📝 *Resumen final del pedido*\n\n*Productos:*\n${summary.text}\n\nSubtotal: ${money(summary.total)}\nDomicilio: Por confirmar\n*Total a pagar: ${money(orderTotal)}*\n\n*Datos de entrega:*\n👤 Nombre: ${userSession.order.name}\n📞 Teléfono: ${userSession.order.telefono}\n🏠 Dirección: ${userSession.order.address}\n💳 Pago: ${userSession.order.paymentMethod}\n\n¿Está todo correcto?\nEscribe *confirmar* para finalizar o *editar*.`;
     await say(sock, jid, summaryText, ctx);
     logger.info(`[${jid}] -> Fase cambiada a ${userSession.phase}. Mostrando resumen.`);
 }
@@ -174,32 +174,62 @@ async function confirmAndProcessOrder(sock, jid, userSession, ctx) {
             userSession.phase = PHASE.SELECCION_OPCION;
             return;
         }
+
         const summary = generateCartSummary(userSession);
         const orderTotal = summary.total + (userSession.order.deliveryCost || 0);
-        const detallesDelProducto = userSession.order.items.map(item => `${item.nombre} x${item.cantidad}`).join(' | ');
+
+        // 1. Obtenemos la descripción base de los productos
+        let detallesDelProducto = userSession.order.items.map(item => {
+            const saboresText = (item.sabores && item.sabores.length > 0) ? `Sabores: ${item.sabores.map(s => s.NombreProducto).join(', ')}` : '';
+            const toppingsText = (item.toppings && item.toppings.length > 0) ? `Toppings: ${item.toppings.map(t => t.NombreProducto).join(', ')}` : '';
+            let detalles = [saboresText, toppingsText].filter(Boolean).join('; ');
+            return `${item.nombre} ${detalles ? `(${detalles})` : ''} x${item.cantidad}`;
+        }).join(' | ');
+        
+        // --- INICIO DE LA CORRECCIÓN ---
+        // 2. Obtenemos las observaciones especiales de Gemini
+        const observaciones = userSession.order.notes ? userSession.order.notes.join(', ') : '';
+
+        // 3. Si hay observaciones, las concatenamos al final
+        if (observaciones) {
+            detallesDelProducto += ` (Observaciones: ${observaciones})`;
+        }
+        // --- FIN DE LA CORRECCIÓN ---
+        
         const firstItem = userSession.order.items[0];
+
         const orderData = {
             nombre: userSession.order.name || '',
             telefono: userSession.order.telefono || jid.split('@')[0],
             direccion: userSession.order.address || '',
             monto: orderTotal,
-            producto: detallesDelProducto,
+            producto: detallesDelProducto, // <--- Usamos la nueva variable con todo incluido
             pago: userSession.order.paymentMethod || 'Pendiente',
             codigo: firstItem ? firstItem.codigo : 'N/A'
+            
+            // Ya no enviamos el campo 'observaciones' por separado
         };
+        
         const urlCompleta = CONFIG.API_BASE + CONFIG.ENDPOINTS.REGISTRAR_CONFIRMACION;
         await axios.post(urlCompleta, orderData);
+
         await say(sock, jid, '🎉 ¡Tu pedido ha sido confirmado! Gracias por tu compra.', ctx);
-        const orderInfoForAdmin = `🆕 NUEVO PEDIDO:\nCliente: ${userSession.order.telefono}\n...`; // Mensaje para el admin
-        if (CONFIG.ADMIN_JID) {
-            await say(sock, CONFIG.ADMIN_JID, orderInfoForAdmin, ctx);
-        }
+        
+       const orderInfoForAdmin = `🆕 NUEVO PEDIDO:\n` +
+            `Cliente: ${userSession.order.telefono}\n` +
+            `Nombre: ${userSession.order.name}\n` +
+            `Dirección: ${userSession.order.address}\n` +
+            `Método de pago: ${userSession.order.paymentMethod}\n` +
+            `Total: ${money(orderTotal)}\n\n` +
+            `*Productos:*\n${summary.text}\n\n` +
+            `Ver en Google Sheets:\n${CONFIG.DELIVERIES_SHEET_URL}`
+        // Limpiamos la sesión para el siguiente pedido
         userSession.order = { items: [] };
+        userSession.order.notes = [];
         userSession.phase = PHASE.SELECCION_OPCION;
+
     } catch (error) {
-        console.error('🔴 ERROR DETALLADO AL ENVIAR A LA API:', error.message);
-        logger.error('Error al procesar pedido o enviar a API:', error.message);
-        await say(sock, jid, '⚠️ Ocurrió un error al procesar el pedido.', ctx);
+        // ... (tu bloque de error detallado)
     }
 }
 

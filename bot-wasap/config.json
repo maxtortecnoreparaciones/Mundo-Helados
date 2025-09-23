@@ -1,6 +1,7 @@
 {
     "ADMIN_JID": "573138777115@s.whatsapp.net",
     "SOCIA_JID": "573138777115@s.whatsapp.net",
+     "DELIVERIES_SHEET_URL": "https://docs.google.com/spreadsheets/d/1479sKgwA2ES503noFusdM-rOYv412-ogcqEouI6zQgI/edit",
     "API_BASE": "http://127.0.0.1:8001",
     "TIME": {
         "MENU_COOLDOWN_MS": 45000,
@@ -10,7 +11,7 @@
     "QR_IMAGE_PATH": "qr_code.jpg",
     "LOG_LEVEL": "info",
     "GOOGLE_MAPS_API_KEY": "TU_API_KEY_AQUI",
-    "GEMINI_API_KEY": "AIzaSyBgsO82-XWugZXX9aAoIIDmLuHLOhlUHXSQ",
+    "GEMINI_API_KEY": "AIzaSyDcCtduUUZBe2rL7ETNKxA9HpTi4Vj96AA",
     "CONVERSATION_LOG_PATH": "conversations.log",
     "ENDPOINTS": {
         "REGISTRAR_CONFIRMACION": "/api/registrar_confirmacion/",

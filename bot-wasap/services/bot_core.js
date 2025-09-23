@@ -1,5 +1,3 @@
-// services/bot_core.js - ACTUALIZADO
-
 'use strict';
 
 const path = require('path');
@@ -104,45 +102,89 @@ async function sendImage(sock, jid, imagePath, caption, ctx) {
     }
 }
 
+// RUTA: services/bot_core.js
+
+// AÑADE ESTA NUEVA FUNCIÓN
+async function askGeminiAboutProduct(ctx, question, product) {
+    if (!ctx.gemini) return "Lo siento, mi conexión con la IA está fallando.";
+    const model = ctx.gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    const prompt = `
+        Eres "Mundo Bot", el asistente experto de la heladería "Mundo Helados".
+        Un cliente está preguntando sobre un producto. Tu tarea es responder su pregunta basándote ÚNICAMENTE en la información proporcionada del producto.
+
+        ---
+        INFORMACIÓN DEL PRODUCTO:
+        Nombre: ${product.nombre}
+        Descripción (Ingredientes): ${product.descripcion}
+        Precio: ${product.precio}
+        ---
+        PREGUNTA DEL CLIENTE:
+        "${question}"
+        ---
+
+        Basado en la información, formula una respuesta amigable, corta y directa. Usa tu personalidad alegre y emojis (🍦, ✨, 🎉).
+    `;
+
+    try {
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        return response.text().trim();
+    } catch (error) {
+        console.error("Error en askGeminiAboutProduct:", error.message);
+        return "No pude procesar la información del producto en este momento.";
+    }
+}
+
+// No olvides añadir la nueva función a tus exports al final del archivo
+module.exports = {
+    // ... tus otras funciones
+    askGemini,
+    askGeminiAboutProduct // <-- AÑADIDO
+};
+
 async function askGemini(ctx, question) {
     if (!ctx.gemini) {
-        console.error("Error: Cliente de Gemini no inicializado en el contexto.");
+        console.error("Error: Cliente de Gemini no inicializado.");
         return null;
     }
     const model = ctx.gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
     
     const prompt = `
-        Eres un asistente experto y amigable para la heladería "Mundo Helados".
-        Tu tarea principal es tomar pedidos, pero también debes responder preguntas comunes sobre el negocio.
+        Eres "Mundo Bot", el asistente experto y amigable de la heladería "Mundo Helados". Tu personalidad es servicial, alegre y usas emojis. No menciones que eres una IA.
 
         ---
-        TAREA 1: TOMAR PEDIDOS
-        Si la petición del cliente parece ser un pedido, extráelo en formato JSON.
-        - "producto": El nombre del producto principal.
-        - "cantidad": El número de unidades (por defecto es 1).
-        - "modificaciones": Una lista de cambios especiales.
-        Si no es un pedido, pon "producto": null.
+        ## TAREA PRINCIPAL
+        Tu objetivo es identificar si el cliente está pidiendo un producto. Si lo hace, extrae los detalles en formato JSON, usando SIEMPRE el nombre oficial del producto.
 
-        Ejemplos de Pedidos:
-        - Petición: "una ensalada sin papaya" -> JSON: {"producto": "Ensalada de frutas", "cantidad": 1, "modificaciones": ["sin papaya"]}
-        - Petición: "quiero 2 malteadas ferrero" -> JSON: {"producto": "Malteada Especial", "cantidad": 2, "modificaciones": ["sabor Ferrero"]}
+        ---
+        ## NOMBRES OFICIALES DE PRODUCTOS CLAVE:
+        - "Cajas de Helado frutos rojos 🍓 o vainilla"
+        - "Litros de Helado"
+        - "Ensalada de frutas"
+        - "Copa Brownie"
         
         ---
-        TAREA 2: RESPONDER PREGUNTAS FRECUENTES (FAQ)
-        Si la petición del cliente es una pregunta, usa la siguiente información para dar una respuesta corta y amigable. Si la respuesta no está aquí, di que no tienes esa información.
+        ## EJEMPLOS:
 
-        **FAQ de Mundo Helados:**
-        - **¿Tienen sabor Ferrero?** Sí, está disponible en nuestra Malteada Especial. Pídela como "Malteada Especial".
-        - **¿Aceptan tarjeta de crédito?** Por el momento solo aceptamos pagos en Efectivo o por Transferencia (Nequi).
-        - **¿Cuánto demora el domicilio?** El domicilio normalmente tarda entre 20 y 40 minutos, dependiendo de tu ubicación y del tráfico.
-        - **¿Tienen helado de pistacho?** No, actualmente no manejamos helado de pistacho.
-        - **¿Cuál es la dirección?** Estamos en la Cra 7h n 34 b 08.
-        - **¿Cuál es el horario?** Abrimos todos los días de 2:00 PM a 10:00 PM.
+        Petición: "Quiero una caja de helado"
+        JSON: {"items": [{"producto": "Cajas de Helado frutos rojos 🍓 o vainilla", "cantidad": 1, "modificaciones": []}]}
 
-        ---
+        Petición: "dame 2 litros"
+        JSON: {"items": [{"producto": "Litros de Helado", "cantidad": 2, "modificaciones": []}]}
 
-        Analiza la siguiente petición del cliente. Si es un pedido, devuelve el JSON. Si es una pregunta, responde basándote en la FAQ.
+        Petición: "un litro de helado de fresa"
+        JSON: {"items": [{"producto": "Litros de Helado", "cantidad": 1, "modificaciones": ["sabor fresa"]}]}
+
+        Petición: "una ensalada sin papaya"
+        JSON: {"items": [{"producto": "Ensalada de frutas", "cantidad": 1, "modificaciones": ["sin papaya"]}]}
         
+        Petición: "la copa brownie tiene queso?"
+        JSON: {"respuesta_texto": "¡Sí! Nuestra Copa Brownie viene con queso rallado, además de helado, brownie y salsas. ¡Es deliciosa! 🍦"}
+        
+        ---
+        Analiza la siguiente petición del cliente y devuelve SIEMPRE una respuesta en formato JSON.
+
         Petición del cliente: "${question}"
     `;
 
@@ -151,17 +193,16 @@ async function askGemini(ctx, question) {
         const response = await result.response;
         let textResponse = response.text().trim();
 
-        // Verificamos si la respuesta es un JSON de pedido o una respuesta de texto
-        if (textResponse.startsWith('{')) {
-            const jsonText = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-            return jsonText; // Devolvemos el JSON para que el bot lo procese
-        } else {
-            // Si es una respuesta de texto, la envolvemos en un formato que el bot pueda manejar
-            return JSON.stringify({ "producto": null, "respuesta_faq": textResponse });
+        if (textResponse.startsWith('```json')) {
+            textResponse = textResponse.substring(7, textResponse.length - 3).trim();
         }
+        
+        JSON.parse(textResponse);
+        return textResponse;
+
     } catch (error) {
-        console.error("Error al interactuar con la API de Gemini:", error.message);
-        return null;
+        console.error("Error al interactuar o procesar JSON de Gemini:", error.message);
+        return JSON.stringify({ "respuesta_texto": "Lo siento, no entendí muy bien. ¿Podrías intentarlo de nuevo? O simplemente escribe *menú*." });
     }
 }
 
