@@ -1,5 +1,3 @@
-// services/bot_core.js - ACTUALIZADO
-
 'use strict';
 
 const path = require('path');
@@ -104,6 +102,47 @@ async function sendImage(sock, jid, imagePath, caption, ctx) {
     }
 }
 
+// RUTA: services/bot_core.js
+
+// AÑADE ESTA NUEVA FUNCIÓN
+async function askGeminiAboutProduct(ctx, question, product) {
+    if (!ctx.gemini) return "Lo siento, mi conexión con la IA está fallando.";
+    const model = ctx.gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    const prompt = `
+        Eres "Mundo Bot", el asistente experto de la heladería "Mundo Helados".
+        Un cliente está preguntando sobre un producto. Tu tarea es responder su pregunta basándote ÚNICAMENTE en la información proporcionada del producto.
+
+        ---
+        INFORMACIÓN DEL PRODUCTO:
+        Nombre: ${product.nombre}
+        Descripción (Ingredientes): ${product.descripcion}
+        Precio: ${product.precio}
+        ---
+        PREGUNTA DEL CLIENTE:
+        "${question}"
+        ---
+
+        Basado en la información, formula una respuesta amigable, corta y directa. Usa tu personalidad alegre y emojis (🍦, ✨, 🎉).
+    `;
+
+    try {
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        return response.text().trim();
+    } catch (error) {
+        console.error("Error en askGeminiAboutProduct:", error.message);
+        return "No pude procesar la información del producto en este momento.";
+    }
+}
+
+// No olvides añadir la nueva función a tus exports al final del archivo
+module.exports = {
+    // ... tus otras funciones
+    askGemini,
+    askGeminiAboutProduct // <-- AÑADIDO
+};
+
 async function askGemini(ctx, question) {
     if (!ctx.gemini) {
         console.error("Error: Cliente de Gemini no inicializado.");
@@ -112,46 +151,58 @@ async function askGemini(ctx, question) {
     const model = ctx.gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
     
     const prompt = `
-        Eres "Mundo Bot", el asistente experto y amigable de la heladería "Mundo Helados". Tu personalidad es servicial, alegre y usas emojis (🍦, ✨, 🎉, 🛒, 😊). Si saludas, empiezas con "Holiii ☺️". No menciones que eres una IA.
+        Eres "Mundo Bot", el asistente experto y amigable de la heladería "Mundo Helados". Tu personalidad es servicial, alegre y usas emojis. No menciones que eres una IA.
 
         ---
-        BASE DE CONOCIMIENTO (FAQ):
-        La descripción de cada producto contiene sus ingredientes.
-        - ¿Aceptan tarjeta de crédito? "Por el momento solo aceptamos pagos en Efectivo o por Transferencia (Nequi) 😊."
-        - ¿Cuánto demora el domicilio? "El domicilio normalmente tarda entre 20 y 40 minutos."
-        - ¿Tienen sabor Ferrero? "¡Claro que sí! Lo encuentras en nuestra Malteada Especial."
-        - Horario y Dirección: "Estamos en la Cra 7h n 34 b 08 y abrimos todos los días de 2:00 PM a 10:00 PM 🍦."
+        ## TAREA PRINCIPAL
+        Tu objetivo es identificar si el cliente está pidiendo un producto. Si lo hace, extrae los detalles en formato JSON, usando SIEMPRE el nombre oficial del producto.
 
         ---
-        TAREAS:
-        1.  TOMA DE PEDIDOS: Si el cliente pide productos, extrae la información en un JSON con una lista "items".
-        2.  RESPUESTA A PREGUNTAS: Si es una pregunta de la FAQ, responde con tu personalidad.
-
+        ## NOMBRES OFICIALES DE PRODUCTOS CLAVE:
+        - "Cajas de Helado frutos rojos 🍓 o vainilla"
+        - "Litros de Helado"
+        - "Ensalada de frutas"
+        - "Copa Brownie"
+        
         ---
-        REGLAS DE SALIDA:
-        - Si es un pedido, devuelve ÚNICAMENTE un JSON. Ejemplo: {"items": [{"producto": "Ensalada", "cantidad": 1, "modificaciones": ["sin papaya"]}]}
-        - Si es una pregunta, devuelve un JSON con la clave "respuesta_texto". Ejemplo: {"respuesta_texto": "¡Claro que sí!..."}
-        - Si no entiendes, devuelve un JSON con "items": null.
+        ## EJEMPLOS:
 
+        Petición: "Quiero una caja de helado"
+        JSON: {"items": [{"producto": "Cajas de Helado frutos rojos 🍓 o vainilla", "cantidad": 1, "modificaciones": []}]}
+
+        Petición: "dame 2 litros"
+        JSON: {"items": [{"producto": "Litros de Helado", "cantidad": 2, "modificaciones": []}]}
+
+        Petición: "un litro de helado de fresa"
+        JSON: {"items": [{"producto": "Litros de Helado", "cantidad": 1, "modificaciones": ["sabor fresa"]}]}
+
+        Petición: "una ensalada sin papaya"
+        JSON: {"items": [{"producto": "Ensalada de frutas", "cantidad": 1, "modificaciones": ["sin papaya"]}]}
+        
+        Petición: "la copa brownie tiene queso?"
+        JSON: {"respuesta_texto": "¡Sí! Nuestra Copa Brownie viene con queso rallado, además de helado, brownie y salsas. ¡Es deliciosa! 🍦"}
+        
         ---
-        Analiza la siguiente petición del cliente: "${question}"
+        Analiza la siguiente petición del cliente y devuelve SIEMPRE una respuesta en formato JSON.
+
+        Petición del cliente: "${question}"
     `;
 
     try {
         const result = await model.generateContent(prompt);
         const response = await result.response;
         let textResponse = response.text().trim();
+
         if (textResponse.startsWith('```json')) {
             textResponse = textResponse.substring(7, textResponse.length - 3).trim();
         }
-        if (textResponse.startsWith('{')) {
-            return textResponse;
-        } else {
-            return JSON.stringify({ "respuesta_texto": textResponse });
-        }
+        
+        JSON.parse(textResponse);
+        return textResponse;
+
     } catch (error) {
-        console.error("Error al interactuar con Gemini:", error.message);
-        return null;
+        console.error("Error al interactuar o procesar JSON de Gemini:", error.message);
+        return JSON.stringify({ "respuesta_texto": "Lo siento, no entendí muy bien. ¿Podrías intentarlo de nuevo? O simplemente escribe *menú*." });
     }
 }
 

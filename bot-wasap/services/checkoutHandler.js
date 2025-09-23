@@ -77,7 +77,7 @@ async function handleCartSummary(sock, jid, userSession, ctx) {
     const summary = generateCartSummary(userSession);
     const summaryMessage = `📝 *Este es tu pedido actual:*\n\n${summary.text}\n\n*Total del pedido: ${money(summary.total)}*`;
     await say(sock, jid, summaryMessage, ctx);
-    const addressPrompt = `Para continuar con el envío, por favor, escribe tu *dirección completa*.`;
+    const addressPrompt = `Para continuar con el envío, por favor, escribe tu *dirección completa* o escribe *reservar* para si vienes al negocio, recuerda debes pagarla para que se aliste.`;
     await say(sock, jid, addressPrompt, ctx);
     userSession.phase = PHASE.CHECK_DIR;
     logger.info(`[${jid}] -> Carrito mostrado. Pasando a la fase de solicitar dirección: ${userSession.phase}`);
@@ -138,18 +138,18 @@ async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
     userSession.order.paymentMethod = paymentMethod;
     userSession.errorCount = 0;
     if (paymentMethod === 'transferencia') {
-        const qrPath = path.join(__dirname, '../qr.png');
+        const qrPath = path.join(__dirname, 'qr_code.jpg');
         if (fs.existsSync(qrPath)) {
-            await sendImage(sock, jid, qrPath, 'Escanea el siguiente código QR para realizar el pago...', ctx);
+            await sendImage(sock, jid, qrPath, 'Escanea el siguiente código QR para realizar el pago...Recuerda enviarnos el comprobante.', ctx);
         } else {
-            await say(sock, jid, 'Realiza el pago a Nequi 123456789...', ctx);
+            await say(sock, jid, 'Realiza el pago a Nequi 3136939636...', ctx);
         }
     }
     userSession.phase = PHASE.CONFIRM_ORDER;
     const summary = generateCartSummary(userSession);
     userSession.order.deliveryCost = 0;
     const orderTotal = summary.total + (userSession.order.deliveryCost || 0);
-    const summaryText = `📝 *Resumen final del pedido*\n\n*Productos:*\n${summary.text}\n\nSubtotal: ${money(summary.total)}\nDomicilio: ${money(userSession.order.deliveryCost)}\n*Total a pagar: ${money(orderTotal)}*\n\n*Datos de entrega:*\n👤 Nombre: ${userSession.order.name}\n📞 Teléfono: ${userSession.order.telefono}\n🏠 Dirección: ${userSession.order.address}\n💳 Pago: ${userSession.order.paymentMethod}\n\n¿Está todo correcto?\nEscribe *confirmar* para finalizar o *editar*.`;
+    const summaryText = `📝 *Resumen final del pedido*\n\n*Productos:*\n${summary.text}\n\nSubtotal: ${money(summary.total)}\nDomicilio: Por confirmar\n*Total a pagar: ${money(orderTotal)}*\n\n*Datos de entrega:*\n👤 Nombre: ${userSession.order.name}\n📞 Teléfono: ${userSession.order.telefono}\n🏠 Dirección: ${userSession.order.address}\n💳 Pago: ${userSession.order.paymentMethod}\n\n¿Está todo correcto?\nEscribe *confirmar* para finalizar o *editar*.`;
     await say(sock, jid, summaryText, ctx);
     logger.info(`[${jid}] -> Fase cambiada a ${userSession.phase}. Mostrando resumen.`);
 }
@@ -206,6 +206,7 @@ async function confirmAndProcessOrder(sock, jid, userSession, ctx) {
             producto: detallesDelProducto, // <--- Usamos la nueva variable con todo incluido
             pago: userSession.order.paymentMethod || 'Pendiente',
             codigo: firstItem ? firstItem.codigo : 'N/A'
+            
             // Ya no enviamos el campo 'observaciones' por separado
         };
         
@@ -214,11 +215,14 @@ async function confirmAndProcessOrder(sock, jid, userSession, ctx) {
 
         await say(sock, jid, '🎉 ¡Tu pedido ha sido confirmado! Gracias por tu compra.', ctx);
         
-        const orderInfoForAdmin = `🆕 NUEVO PEDIDO:\nCliente: ${userSession.order.telefono}\nNombre: ${userSession.order.name}\nDirección: ${userSession.order.address}\nMétodo de pago: ${userSession.order.paymentMethod}\nTotal: ${money(orderTotal)}\n\n*Productos:*\n${summary.text}`;
-        if (CONFIG.ADMIN_JID) {
-            await say(sock, CONFIG.ADMIN_JID, orderInfoForAdmin, ctx);
-        }
-        
+       const orderInfoForAdmin = `🆕 NUEVO PEDIDO:\n` +
+            `Cliente: ${userSession.order.telefono}\n` +
+            `Nombre: ${userSession.order.name}\n` +
+            `Dirección: ${userSession.order.address}\n` +
+            `Método de pago: ${userSession.order.paymentMethod}\n` +
+            `Total: ${money(orderTotal)}\n\n` +
+            `*Productos:*\n${summary.text}\n\n` +
+            `Ver en Google Sheets:\n${CONFIG.DELIVERIES_SHEET_URL}`
         // Limpiamos la sesión para el siguiente pedido
         userSession.order = { items: [] };
         userSession.order.notes = [];

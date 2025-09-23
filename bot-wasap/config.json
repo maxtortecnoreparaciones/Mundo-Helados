@@ -1,6 +1,7 @@
 {
     "ADMIN_JID": "573138777115@s.whatsapp.net",
     "SOCIA_JID": "573138777115@s.whatsapp.net",
+     "DELIVERIES_SHEET_URL": "https://docs.google.com/spreadsheets/d/1479sKgwA2ES503noFusdM-rOYv412-ogcqEouI6zQgI/edit",
     "API_BASE": "http://127.0.0.1:8001",
     "TIME": {
         "MENU_COOLDOWN_MS": 45000,

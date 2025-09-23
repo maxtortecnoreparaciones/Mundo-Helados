@@ -35,34 +35,25 @@ function initializeUserSession(jid, ctx) {
     return ctx.sessions[jid];
 }
 
-// =================================================================================
-// NUEVA FUNCIÓN: handleNaturalLanguageOrder
-// Esta es la función que habla con Gemini para entender pedidos o preguntas.
-// =================================================================================
 async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
-    logger.info(`[${jid}] -> No se reconoció el input, consultando a Gemini: "${text}"`);
+    logger.info(`[${jid}] -> Procesando con Gemini: "${text}"`);
     const jsonResponse = await askGemini(ctx, text);
-
     if (!jsonResponse) {
         await say(sock, jid, 'Lo siento, no pude procesar tu mensaje. Intenta de nuevo.', ctx);
         return;
     }
-
     try {
         const orderInfo = JSON.parse(jsonResponse);
-        
         if (orderInfo && orderInfo.respuesta_texto) {
             await say(sock, jid, orderInfo.respuesta_texto, ctx);
         } else if (orderInfo && orderInfo.items && orderInfo.items.length > 0) {
-            // Por ahora, procesamos el primer item que encuentre la IA
             const firstItem = orderInfo.items[0];
             if (firstItem.modificaciones && firstItem.modificaciones.length > 0) {
                 userSession.order.notes = (userSession.order.notes || []).concat(firstItem.modificaciones);
             }
             await handleBrowseImages(sock, jid, firstItem.producto, userSession, ctx);
         } else {
-            // Mensaje final si ni el bot ni Gemini entendieron.
-            await say(sock, jid, 'No estoy seguro de cómo ayudarte con eso. Escribe *menú* para ver las opciones que tengo.', ctx);
+            await say(sock, jid, 'No estoy seguro de cómo ayudarte. Escribe *menú* para ver las opciones.', ctx);
         }
     } catch (e) {
         logger.error(`[${jid}] -> Error al procesar JSON de Gemini: ${e.message}`);
@@ -73,15 +64,40 @@ async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
 async function processIncomingMessage(sock, msg, ctx) {
     try {
         const { from, text, key } = msg;
+
+        // --- INICIO DE LA CORRECCIÓN ---
+        // Se mueven estas dos líneas aquí arriba para que siempre estén disponibles
+        // para todas las partes de la función, solucionando el error. NO SE BORRA NADA MÁS.
         const cleanedText = text.replace(/[^0-9]/g, '').trim();
         const t = text.toLowerCase().trim();
+        // --- FIN DE LA CORRECCIÓN ---
 
         if (!text || !from || from.includes('status@broadcast') || from.includes('@g.us') || key.fromMe) return;
+        
+        const jid = from;
+
+        // --- Log de conversación del humano ---
+        logConversation(jid, text);
+
+        // --- Bloque de comandos de administrador ---
+        if (jid === CONFIG.ADMIN_JID) {
+            switch (t) {
+                case 'disable':
+                    ctx.botEnabled = false;
+                    await say(sock, jid, '🔴 Bot desactivado.', ctx);
+                    return;
+                case 'enable':
+                    ctx.botEnabled = true;
+                    await say(sock, jid, '🟢 Bot activado.', ctx);
+                    return;
+            }
+        }
+        
+        if (!ctx.botEnabled) return;
+        
         if (processedMessages.has(key.id)) return;
         processedMessages.set(key.id, Date.now());
 
-        logConversation(from, text);
-        const jid = from;
         const userSession = initializeUserSession(jid, ctx);
         userSession.lastPromptAt = Date.now();
         logger.info(`[${jid}] -> Fase actual: ${userSession.phase}. Mensaje recibido: "${text}"`);
@@ -96,24 +112,21 @@ async function processIncomingMessage(sock, msg, ctx) {
             case PHASE.SELECCION_OPCION:
                 const menuOptions = ['1', '2', '3'];
                 const isMenuOption = menuOptions.includes(t) || findBestMatch(t, ['ver menu', 'direccion', 'encargo']);
-                
                 if (isMenuOption) {
                     await handleSeleccionOpcion(sock, jid, t, userSession, ctx);
                 } else {
                     await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
                 }
                 break;
-            
             case PHASE.BROWSE_IMAGES:
-                const postAddOptions = ['1', '2', '3', 'pagar', 'carrito', 'menu'];
-                const isPostAddOption = findBestMatch(t, postAddOptions);
-
-                if (isPostAddOption) {
-                    if (isPostAddOption === '1' || isPostAddOption === 'pagar' || isPostAddOption === 'carrito') {
+                const postAddOptions = ['1', 'pagar', 'carrito', '2', '3', 'menu'];
+                const bestMatch = findBestMatch(t, postAddOptions);
+                if (bestMatch) {
+                    if (bestMatch === '1' || bestMatch === 'pagar' || bestMatch === 'carrito') {
                         await handleCartSummary(sock, jid, userSession, ctx);
-                    } else if (isPostAddOption === '2') {
+                    } else if (bestMatch === '2') {
                         await say(sock, jid, '¡Perfecto! Escribe el nombre del siguiente producto que deseas añadir.', ctx);
-                    } else if (isPostAddOption === '3' || isPostAddOption === 'menu') {
+                    } else if (bestMatch === '3' || bestMatch === 'menu') {
                         resetChat(jid, ctx);
                         await sendMainMenu(sock, jid, ctx);
                     }
@@ -121,7 +134,6 @@ async function processIncomingMessage(sock, msg, ctx) {
                     await handleBrowseImages(sock, jid, t, userSession, ctx);
                 }
                 break;
-
             case PHASE.SELECCION_PRODUCTO:
                 await handleSeleccionProducto(sock, jid, t, userSession, ctx);
                 break;
@@ -149,7 +161,6 @@ async function processIncomingMessage(sock, msg, ctx) {
             case PHASE.ENCARGO:
                 await handleEncargo(sock, jid, t, userSession, ctx);
                 break;
-
             default:
                 await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
                 break;
@@ -161,25 +172,96 @@ async function processIncomingMessage(sock, msg, ctx) {
     }
 }
 
-
 async function handleSeleccionProducto(sock, jid, input, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSeleccionProducto. Selección: "${input}"`);
-    const selection = parseInt(input);
+    
     const matches = userSession.lastMatches;
-    if (!validateInput(input, 'number', { max: matches.length })) {
-        await say(sock, jid, `❌ Por favor, elige un número entre 1 y ${matches.length}.`, ctx);
-        return;
+    const selection = parseInt(input);
+    
+    if (!isNaN(selection) && selection >= 1 && selection <= matches.length) {
+        
+        const productoSeleccionado = matches[selection - 1];
+        userSession.currentProduct = productoSeleccionado;
+        userSession.phase = PHASE.SELECT_DETAILS;
+
+        const saboresRequeridos = productoSeleccionado.saboresRequeridos;
+        let mensajeSabores = '';
+        if (saboresRequeridos > 1) {
+            mensajeSabores = `Elige ${saboresRequeridos} sabores de la lista (ej: S1, S3):\n\n`;
+        } else {
+            mensajeSabores = `Elige 1 sabor de la lista (ej: S1):\n\n`;
+        }
+
+        const listaSabores = "S1) Chocolate\nS2) fresa\nS3) vainilla\nS4) cainilla chips\nS5) arequipe\nS6) ron pasas\nS7) frutos del boque\nS8) arcoiris\nS9) brownie\n";
+        const listaToppings = "T1) Fresas Frescas\nT2) crema chantilly\n...";
+        
+        const mensaje = `Has seleccionado: *${productoSeleccionado.nombre}* — $ ${money(productoSeleccionado.precio)}\n` +
+                        `${productoSeleccionado.descripcion || ''}\n\n` +
+                        `${mensajeSabores}${listaSabores}\n\n` +
+                        `*Elige hasta 23 toppings (ej: T1, T2):*\n${listaToppings}`;
+
+        say(sock, jid, mensaje, ctx).then(() => {
+            // Lógica después de enviar el mensaje, si es necesaria
+        }).catch(err => {
+            logger.error(`Error al enviar mensaje: ${err}`);
+        });
+
+    } else {
+        say(sock, jid, '❌ Por favor, elige un número válido de la lista.', ctx).catch(err => {
+            logger.error(`Error al enviar mensaje de error: ${err}`);
+        });
     }
-    const producto = matches[selection - 1];
-    await handleProductSelection(sock, jid, producto, ctx);
 }
 
-async function handleSelectDetails(sock, jid, input, userSession, ctx) {
-    logger.info(`[${jid}] -> Entrando a handleSelectDetails. Input: "${input}"`);
-    // Tu lógica para seleccionar sabores y toppings va aquí
-    await say(sock, jid, '🔢 ¿Cuántas unidades de este producto quieres?', ctx);
-    userSession.phase = PHASE.SELECT_QUANTITY;
+
+function handleSelectDetails(sock, jid, input, userSession, ctx) {
+    // Elimina el 'async' del inicio de la función
+    // y usa .then() en lugar de await para las llamadas a 'say'
+    // ... (la misma lógica de validación) ...
+
+    say(sock, jid, '✅ Sabores y toppings agregados. ¿Cuántas unidades de este producto quieres?', ctx)
+        .then(() => {
+            userSession.phase = PHASE.SELECT_QUANTITY;
+        })
+        .catch(err => {
+            logger.error(`Error al enviar mensaje: ${err}`);
+        });
+    
+    // Y así con todos los 'await say' que tengas en esta función
 }
+
+// NUEVA FUNCIÓN para manejar los sabores uno por uno
+async function handleSelectNextSabor(sock, jid, input, userSession, ctx) {
+    const selection = input.toLowerCase().trim();
+    if (selection.startsWith('s')) {
+        const index = parseInt(selection.substring(1));
+        const saboresDisponibles = ['chocolate', 'fresa', 'vainilla', 'vainilla chips', 'arequipe', 'ron pasas', 'frutos del boque', 'arcoiris', 'brownie'];
+        
+        if (!isNaN(index) && index > 0 && index <= saboresDisponibles.length) {
+            userSession.saboresSeleccionados.push(saboresDisponibles[index - 1]);
+            const saboresRequeridos = userSession.currentProduct.saboresRequeridos;
+            const saboresActuales = userSession.saboresSeleccionados.length;
+            
+            if (saboresActuales < saboresRequeridos) {
+                await say(sock, jid, `✅ Has seleccionado: *${saboresDisponibles[index - 1]}*. ¡Te faltan ${saboresRequeridos - saboresActuales} sabores! Elige el siguiente:`, ctx);
+            } else {
+                // Si ya se completaron los sabores requeridos, preguntar por los toppings
+                await say(sock, jid, '✅ Todos los sabores agregados. Ahora, elige tus toppings (ej: T1, T2):', ctx);
+                userSession.phase = PHASE.SELECT_TOPPINGS;
+            }
+        } else {
+            await say(sock, jid, '❌ Por favor, elige un sabor válido de la lista (ej: S1).', ctx);
+        }
+    } else if (selection.startsWith('t')) {
+        // Lógica para manejar la selección de toppings si el cliente los envía antes de terminar con los sabores
+        // ... (Tu lógica de validación de toppings) ...
+        await say(sock, jid, 'Por favor, termina de elegir tus sabores antes de seleccionar toppings.', ctx);
+    } else {
+        await say(sock, jid, '❌ Por favor, elige un sabor válido.', ctx);
+    }
+}
+
+
 
 async function handleSelectQuantity(sock, jid, cleanedText, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSelectQuantity. Cantidad: "${cleanedText}"`);
@@ -267,7 +349,7 @@ function initializeBotContext() {
         sessions: {},
         botEnabled: true,
         startTime: Date.now(),
-        version: '3.1.0'
+        version: '3.2.0' // Versión final con IA
     };
     logger.info('✅ Contexto del bot inicializado.');
     return ctx;
