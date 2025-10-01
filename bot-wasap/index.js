@@ -8,9 +8,10 @@ const {
     DisconnectReason,
     toBuffer
 } = require('@whiskeysockets/baileys');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { say, getSaboresYToppings } = require('./services/bot_core');
 const { setupSocketHandlers } = require('./handlers/handler');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');

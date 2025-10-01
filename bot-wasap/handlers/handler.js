@@ -11,15 +11,18 @@ const {
     addToCart,
     handleProductSelection,
     startEncargoBrowse,
-    sleep
+    sleep,
+    askGemini
 } = require('../services/bot_core');
 const {
     handleCartSummary,
     handleEnterAddress,
     handleEnterName,
+    handleEnterTelefono,
     handleEnterPaymentMethod,
     handleConfirmOrder,
     validateInput
+    
 } = require('../services/checkoutHandler');
 const {
     logConversation,
@@ -84,83 +87,148 @@ function initializeUserSession(jid, ctx) {
 }
 
 
+
+
+async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
+    console.log("DEBUG: Entrando en handleNaturalLanguageOrder...");
+    logger.info(`[${jid}] -> Consultando a Gemini: "${text}"`);
+    const jsonResponse = await askGemini(ctx, text);
+console.log("DEBUG: Respuesta recibida de Gemini (texto plano):", jsonResponse);
+    if (!jsonResponse) {
+        await say(sock, jid, 'Lo siento, no pude procesar tu mensaje. Intenta de nuevo.', ctx);
+        return;
+    }
+
+    try {
+        const orderInfo = JSON.parse(jsonResponse);
+
+        if (orderInfo && orderInfo.respuesta_texto) {
+            // Caso 1: Gemini detectó una pregunta y nos dio la respuesta.
+            await say(sock, jid, orderInfo.respuesta_texto, ctx);
+       } else if (orderInfo && orderInfo.items && orderInfo.items.length > 0) {
+    for (const item of orderInfo.items) {
+        // Guardamos notas/modificaciones si hay
+        if (item.modificaciones && item.modificaciones.length > 0) {
+            userSession.pendingNotes = item.modificaciones.join(', ');
+        }
+
+        // Si Gemini dio cantidad, la usamos, si no default 1
+        const cantidad = item.cantidad ? parseInt(item.cantidad) : 1;
+
+        // 🔎 Buscamos el producto en tu catálogo
+        await handleBrowseImages(sock, jid, item.producto, userSession, ctx);
+
+        // Opcional: si el catálogo devuelve 1 match exacto, lo agregamos directo
+        if (userSession.currentProduct && userSession.phase === PHASE.SELECT_DETAILS) {
+            addToCart(ctx, jid, {
+                codigo: userSession.currentProduct.CodigoProducto,
+                nombre: userSession.currentProduct.NombreProducto,
+                precio: userSession.currentProduct.Precio_Venta,
+                sabores: item.sabores || [],
+                toppings: item.toppings || [],
+                notas: userSession.pendingNotes || ''
+            }, cantidad);
+
+            await say(sock, jid, `✅ ¡Agregado automáticamente! *${cantidad}x* ${userSession.currentProduct.NombreProducto}`, ctx);
+
+            // Después de agregar, volvemos a fase browse
+            userSession.phase = PHASE.BROWSE_IMAGES;
+            userSession.currentProduct = null;
+        }
+    }
+
+    await say(sock, jid, '🛒 Si quieres ver tu pedido escribe *carrito* o *pagar*.', ctx);
+
+            
+            // Pasamos el NOMBRE OFICIAL del producto a nuestra función de búsqueda
+            await handleBrowseImages(sock, jid, firstItem.producto, userSession, ctx);
+             console.log(`DEBUG: handleBrowseImages fue llamado con el texto: "${text}"`);
+        } else {
+            // Caso 3: Ni el bot ni Gemini entendieron.
+            await say(sock, jid, 'No estoy seguro de cómo ayudarte con eso. Escribe *menú* para ver las opciones que tengo.', ctx);
+        }
+    } catch (e) {
+        logger.error(`[${jid}] -> Error al procesar JSON de Gemini: ${e.message}`);
+        await say(sock, jid, 'Hubo un problema al interpretar la respuesta de la IA. Intenta ser un poco más específico.', ctx);
+    }
+}
+
+
 async function processIncomingMessage(sock, msg, ctx) {
     try {
         const { from, text, key } = msg;
+
         const cleanedText = text.replace(/[^0-9]/g, '').trim();
         const t = text.toLowerCase().trim();
 
         if (!text || !from || from.includes('status@broadcast') || from.includes('@g.us') || key.fromMe) return;
-
-        if (processedMessages.has(key.id)) return;
-        processedMessages.set(key.id, Date.now());
-
-        logConversation(from, text);
+        
         const jid = from;
 
-        const userSession = initializeUserSession(jid, ctx);
-        const now = Date.now();
-        userSession.lastPromptAt = now;
+        logConversation(jid, text);
 
-        logger.info(`[${jid}] -> Fase actual: ${userSession.phase}. Mensaje recibido: "${text}"`);
-
-        // --- LÓGICA DE ADMINISTRADOR (Sin cambios) ---
         if (jid === CONFIG.ADMIN_JID) {
             switch (t) {
-                case 'test':
-                    await say(sock, jid, `🤖 Bot funcionando. Sesiones activas: ${Object.keys(ctx.sessions).length}`, ctx);
-                    return;
-                case 'reset':
-                    resetChat(jid, ctx);
-                    await say(sock, jid, '🔄 Chat reiniciado. ✅', ctx);
-                    return;
                 case 'disable':
                     ctx.botEnabled = false;
-                    await say(sock, jid, '🔴 Bot desactivado. 📴', ctx);
+                    await say(sock, jid, '🔴 Bot desactivado.', ctx);
                     return;
                 case 'enable':
                     ctx.botEnabled = true;
-                    await say(sock, jid, '🟢 Bot activado. 🔛', ctx);
+                    await say(sock, jid, '🟢 Bot activado.', ctx);
                     return;
             }
         }
+        
+        if (!ctx.botEnabled) return;
+        
+        if (processedMessages.has(key.id)) return;
+        processedMessages.set(key.id, Date.now());
 
-        if (!ctx.botEnabled && jid !== CONFIG.ADMIN_JID) {
-            // No es necesario un await aquí, podemos dejar que se envíe en segundo plano
-            say(sock, jid, '🚫 Bot desactivado temporalmente. 😔', ctx);
-            return;
-        }
+        const userSession = initializeUserSession(jid, ctx);
+        userSession.lastPromptAt = Date.now();
+        logger.info(`[${jid}] -> Fase actual: ${userSession.phase}. Mensaje recibido: "${text}"`);
 
-        // --- LÓGICA DE REINICIO Y COMANDOS GLOBALES ---
-        if (isGreeting(t) || wantsMenu(t) || shouldResetForInactivity(userSession, now)) {
+        if (isGreeting(t) || wantsMenu(t)) {
             resetChat(jid, ctx);
             await sendMainMenu(sock, jid, ctx);
             return;
         }
 
-        // =================================================================================
-        // CAMBIO 2: LLAMADA EXPLÍCITA Y SEGURA AL RESUMEN DEL CARRITO
-        // Esta sección ahora maneja de forma centralizada la solicitud de ver el carrito.
-        // La lógica ya no está dispersa, evitando llamadas accidentales.
-        // =================================================================================
-        if (t === 'pagar' || t === 'carrito' || t === 'ver carrito') {
-            // NOTA: Asegúrate de que tu función `handleCartSummary` en `checkoutHandler.js`
-            // también tenga la verificación de seguridad que discutimos.
-            await handleCartSummary(sock, jid, userSession, ctx);
-            return;
-        }
-
-
-        // --- MANEJADOR DE FASES (SWITCH PRINCIPAL) ---
         switch (userSession.phase) {
             case PHASE.SELECCION_OPCION:
-                await handleSeleccionOpcion(sock, jid, t, userSession, ctx);
+                const normalCommands = {
+                    'menu': '1', 'ver menu': '1', 'productos': '1', 'carta': '1',
+                    'direccion': '2', 'horario': '2', 'ubicacion': '2',
+                    'encargo': '3', 'eventos': '3', 'litros': '3'
+                };
+                const command = normalCommands[t];
+                const menuOptions = ['1', '2', '3'];
+
+                if (command || menuOptions.includes(t)) {
+                    const option = command || t;
+                    await handleSeleccionOpcion(sock, jid, option, userSession, ctx);
+                } else {
+                    await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
+                }
                 break;
             case PHASE.BROWSE_IMAGES:
-                await handleBrowseImages(sock, jid, t, userSession, ctx);
-                // CAMBIO 3: Se elimina cualquier llamada posterior. El 'break' asegura
-                // que el bot espere la siguiente acción del usuario, corrigiendo el flujo del log.
-                break;
+    const postAddOptions = ['pagar', 'carrito', 'menu', '1', '2', '3'];
+
+    if (postAddOptions.includes(t)) {
+        if (t === 'pagar' || t === 'carrito' || t === '1') {
+            await handleCartSummary(sock, jid, userSession, ctx);
+        } else if (t === '2') {
+            await say(sock, jid, '¡Perfecto! Escribe el nombre del siguiente producto que deseas añadir.', ctx);
+        } else if (t === 'menu' || t === '3') {
+            resetChat(jid, ctx);
+            await sendMainMenu(sock, jid, ctx);
+        }
+    } else {
+        // Si no es una opción, es una búsqueda de producto.
+        await handleBrowseImages(sock, jid, t, userSession, ctx);
+    }
+    break;
             case PHASE.SELECCION_PRODUCTO:
                 await handleSeleccionProducto(sock, jid, t, userSession, ctx);
                 break;
@@ -176,43 +244,53 @@ async function processIncomingMessage(sock, msg, ctx) {
             case PHASE.CHECK_NAME:
                 await handleEnterName(sock, jid, text, userSession, ctx);
                 break;
+            case PHASE.CHECK_TELEFONO:
+                await handleEnterTelefono(sock, jid, text, userSession, ctx);
+                break;
             case PHASE.CHECK_PAGO:
                 await handleEnterPaymentMethod(sock, jid, text, userSession, ctx);
                 break;
             case PHASE.CONFIRM_ORDER:
-                await handleConfirmOrder(sock, jid, t, userSession, ctx);
-                break;
+    // Verificamos si es una confirmación inicial (después del carrito) o la final
+    const isInitialConfirmation = validateInput(t, 'confirmation');
+
+    // SI ES LA CONFIRMACIÓN INICIAL Y AÚN NO TENEMOS LA DIRECCIÓN:
+    if (isInitialConfirmation && !userSession.order.address) {
+        logger.info(`[${jid}] -> Confirmación inicial detectada. Pasando a pedir dirección.`);
+        userSession.phase = PHASE.CHECK_DIR; // <-- ¡Paso clave!
+        await say(sock, jid, '🏠 ¡Perfecto! Para continuar, por favor escribe tu *dirección de entrega*.', ctx);
+    } 
+    // SI YA ESTAMOS EN EL PROCESO DE CONFIRMACIÓN FINAL (o editando):
+    else {
+        await handleConfirmOrder(sock, jid, t, userSession, ctx);
+    }
+    break;
             case PHASE.ENCARGO:
                 await handleEncargo(sock, jid, t, userSession, ctx);
                 break;
             default:
-                logger.warn(`[${jid}] -> Fase inesperada o indefinida: "${userSession.phase}". Mensaje no procesado por el switch.`);
-                userSession.errorCount++;
-                await say(sock, jid, '⚠️ Ocurrió un error. Escribe "menú" para volver al inicio.', ctx);
+                await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
                 break;
         }
-
-        if (userSession.errorCount > 3) {
-            logger.warn(`Demasiados errores para ${jid}, reiniciando chat.`);
-            resetChat(jid, ctx);
-            await say(sock, jid, 'Hemos reiniciado el chat debido a múltiples intentos fallidos. Por favor, intenta de nuevo.', ctx);
-        }
-
     } catch (error) {
         console.error('Error al procesar mensaje:', error);
         logUserError(msg.from, 'main_handler', msg.text, error.stack);
-        try {
-            await say(sock, msg.from, '⚠️ Ocurrió un error. Por favor, intenta de nuevo o escribe "menu" para volver al inicio.', ctx);
-        } catch (e) {
-            logger.error('Error al enviar mensaje de error:', e);
+
+        const errorMessageForAdmin = `🔴 *¡Error Crítico en el Bot!* 🔴\n\n- *Cliente:* ${msg.from}\n- *Mensaje:* "${msg.text}"\n- *Error:* ${error.message}\n\nPor favor, revisa la consola o los logs para más detalles.`;
+        if (CONFIG.ADMIN_JIDS && CONFIG.ADMIN_JIDS.length > 0) {
+            for (const adminJid of CONFIG.ADMIN_JIDS) {
+                try {
+                    await say(sock, adminJid, errorMessageForAdmin, ctx);
+                } catch (notifyError) {
+                    console.error(`Error al notificar al admin ${adminJid}:`, notifyError);
+                }
+            }
         }
+        await say(sock, msg.from, '⚠️ Ocurrió un error. Por favor, intenta de nuevo.', ctx);
     }
 }
 
-// =================================================================================
-// EL RESTO DEL ARCHIVO PERMANECE IGUAL, YA QUE LA LÓGICA DE CADA FUNCIÓN
-// PARECE CORRECTA. EL PROBLEMA ESTABA EN LA GESTIÓN DE LA SESIÓN Y EL FLUJO.
-// =================================================================================
+
 
 
 async function sendMainMenu(sock, jid, ctx) {
@@ -420,6 +498,13 @@ function setupSocketHandlers(sock, ctx) {
     sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
             if (!msg.message) continue;
+             const messageTimestampInSeconds = msg.messageTimestamp;
+            const botStartTimeInMs = ctx.startTime;
+
+            if ((messageTimestampInSeconds * 1000) < botStartTimeInMs) {
+                logger.info(`[${msg.key.remoteJid}] -> Ignorando mensaje antiguo.`);
+                continue; 
+            }
             const messageData = {
                 from: msg.key.remoteJid,
                 text: msg.message?.conversation || msg.message?.extendedTextMessage?.text || '',

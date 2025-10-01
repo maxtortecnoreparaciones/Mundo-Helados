@@ -1,5 +1,4 @@
-// services/bot_core.js - ACTUALIZADO
-
+console.log('--- Iniciando diagnóstico en bot_core.js ---');
 'use strict';
 
 const path = require('path');
@@ -7,8 +6,10 @@ const fs = require('fs');
 const axios = require('axios');
 const { logConversation } = require('../utils/logger');
 const { sleep, money } = require('../utils/util');
-
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const CONFIG = require('../config.json');
+
+
 
 async function getSaboresYToppings(ctx) {
     try {
@@ -105,30 +106,58 @@ async function sendImage(sock, jid, imagePath, caption, ctx) {
 }
 
 async function askGemini(ctx, question) {
-    // Tu función askGemini no necesita cambios
-    const model = ctx.gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const prompt = `Eres un asistente de ventas muy amigable y experto en helados. Responde la siguiente pregunta o comentario como si fueras el bot de heladería 'Mundo Helados' en Riohacha. Mantén tus respuestas concisas y amigables. No menciones que eres una IA. Si te preguntan algo fuera de helados o la heladería, responde de forma educada que tu especialidad es el helado.
+    if (!ctx.gemini) {
+        console.error("Error: Cliente de Gemini no inicializado.");
+        return JSON.stringify({ "respuesta_texto": "Lo siento, mi conexión con la IA está fallando." });
+    }
+
     
-    Ejemplo de preguntas y respuestas:
-    - Pregunta: "jajaja a dormir puesss"
-    - Respuesta: "¡Que tengas una excelente noche! ✨ Cuando estés listo para tu helado, solo escribe *menú*."
+    const genAI = new GoogleGenerativeAI(CONFIG.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-flash" });
+        
 
-    - Pregunta: "cuanto valen las fresas"
-    - Respuesta: "Las fresas frescas (topping T1) no tienen costo adicional."
+    const prompt = `
+                Eres "Mundo Bot", el asistente experto de la heladería "Mundo Helados".
 
-    - Pregunta: "horarios, no analiza la conversacion por que sigue sin responder varias preguntas"
-    - Respuesta: "¡Lo siento! Estoy aprendiendo a mejorar mi conversación. Para saber nuestros horarios, la dirección es *Cra 7h n 34 b 08* y el horario de atención es de 2:00 PM a 10:00 PM todos los días."
+        **FAQ de Mundo Helados:**
+        - ¿Tienen sabor Ferrero? → Sí, está disponible en nuestra Malteada Especial.
+        - ¿Aceptan tarjeta de crédito? → Solo aceptamos pagos en Efectivo o por Transferencia (Nequi).
+        - ¿Cuánto demora el domicilio? → Entre 20 y 40 minutos.
+        - ¿Tienen helado de pistacho? → No, actualmente no.
+        - ¿Cuál es la dirección? → Cra 7h n 34 b 08.
+        - ¿Cuál es el horario? → Todos los días de 2:00 PM a 10:00 PM.
 
-    Pregunta/Comentario del cliente: "${question}"
-    
-    Respuesta:`;
+        TAREAS:
+        1. TOMA DE PEDIDOS: Si el cliente pide productos, devuelve un JSON con una lista "items".
+        2. RESPUESTA A PREGUNTAS: Si es una pregunta, responde en un JSON con la clave "respuesta_texto".
+
+        EJEMPLOS:
+        - Petición: "Quiero una ensalada sin papaya" 
+          → {"items": [{"producto": "Ensalada de frutas", "cantidad": 1, "modificaciones": ["sin papaya"]}]}
+
+        - Petición: "Aceptan tarjeta?" 
+          → {"respuesta_texto": "Por el momento solo aceptamos Efectivo o Transferencia (Nequi) 😊."}
+
+        ---
+        Petición del cliente: "${question}"
+
+        RECUERDA:
+- Tu única salida debe ser un objeto JSON válido.
+- Siempre incluye la clave "cantidad". Si el cliente no dice cuántos, pon 1.
+- No incluyas ningún otro texto, saludo o explicación. Solo el JSON.
+    `;
+
     try {
         const result = await model.generateContent(prompt);
         const response = await result.response;
-        return response.text();
+        let text = response.text().trim();
+        text = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+return text;   // ✅ ahora sí devuelve el JSON limpio
+    ;
     } catch (error) {
         console.error("Error al interactuar con la API de Gemini:", error.message);
-        return "¡Uy! Parece que mis circuitos se enredaron. 😅 Por favor, intenta de nuevo.";
+        // Devolvemos un JSON de error para no romper el flujo.
+        return JSON.stringify({ "respuesta_texto": "¡Uy! No entiendo indicame cual es tu solicitud mas exacta. 😅 Por favor, intenta de nuevo." });
     }
 }
 
@@ -237,4 +266,5 @@ module.exports = {
     askGemini,
     sleep,
     getSaboresYToppings
+    
 };

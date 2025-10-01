@@ -82,7 +82,7 @@ async function handleCartSummary(sock, jid, userSession, ctx) {
     // CAMBIO 2: Se utiliza la nueva función interna `generateCartSummary`.
     const summary = generateCartSummary(userSession);
 
-    const fullMessage = `📝 *Este es tu pedido actual:*\n\n${summary.text}\n\n*Total del pedido: ${money(summary.total)}*\n\n¿Qué deseas hacer?\n\n*1)* ✅ Confirmar y finalizar pedido\n*2)* ➕ Seguir comprando\n*3)* ✏️ Editar mi pedido (Próximamente)\n*4)* 🗑️ Vaciar carrito y empezar de nuevo`;
+    const fullMessage = `📝 *Este es tu pedido actual:*\n\n${summary.text}\n\n*Total del pedido: ${money(summary.total)}*\n\n¿Qué deseas hacer?\n\n*1)* ✅ Confirmar y finalizar pedido\n*2)* ➕ Seguir comprando\n🍨 Escribe el nombre o una palabra de tu helado favorito para seguir comprando`;
 
     await say(sock, jid, fullMessage, ctx);
     userSession.phase = PHASE.CONFIRM_ORDER;
@@ -120,6 +120,18 @@ async function handleEnterName(sock, jid, input, userSession, ctx) {
 
     await say(sock, jid, '💳 ¿Cómo vas a pagar? Escribe *Transferencia* o *Efectivo*.', ctx);
     logger.info(`[${jid}] -> Fase cambiada a ${userSession.phase}. Solicitando método de pago.`);
+}
+
+async function handleEnterTelefono(sock, jid, input, userSession, ctx) {
+    logger.info(`[${jid}] -> Entrando a handleEnterTelefono.`);
+    const telefono = input.replace(/[^0-9]/g, '').trim();
+    if (!validateInput(telefono, 'string', { minLength: 10 })) {
+        await say(sock, jid, '❌ Por favor, escribe un número de teléfono válido.', ctx);
+        return;
+    }
+    userSession.order.telefono = telefono;
+    userSession.phase = PHASE.CHECK_PAGO;
+    await say(sock, jid, '💳 ¿Cómo vas a pagar? Escribe *Transferencia* o *Efectivo*.', ctx);
 }
 
 async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
@@ -218,9 +230,14 @@ async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
                 pago: userSession.order.paymentMethod || 'Pendiente',
                 // ...otros campos
             };
+            logger.info(`[${jid}] -> Datos a enviar a la API: ${JSON.stringify(orderData, null, 2)}`);
             
             // Envío a la API
-            await axios.post(CONFIG.ENDPOINTS.REGISTRAR_CONFIRMACION, orderData);
+            // 1. Construimos la URL completa uniendo la base y el endpoint
+const fullUrl = CONFIG.API_BASE + CONFIG.ENDPOINTS.REGISTRAR_CONFIRMACION;
+
+// 2. Usamos la URL completa en la llamada a axios
+await axios.post(fullUrl, orderData);
 
             await say(sock, jid, '🎉 ¡Tu pedido ha sido confirmado! Un agente se contactará contigo para coordinar la entrega. ¡Gracias por tu compra!', ctx);
             
@@ -230,7 +247,8 @@ async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
             resetChat(jid, ctx);
 
         } catch (error) {
-            logger.error('Error al procesar pedido o enviar a API:', error.response?.data || error.message);
+            
+             logger.error(`[${jid}] -> Error al enviar a la API. Causa: ${error.message}`);
             await say(sock, jid, '⚠️ Ocurrió un error al procesar el pedido. Por favor, contacta directamente con nosotros.', ctx);
         }
 
@@ -241,13 +259,17 @@ async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
         userSession.errorCount++;
         await say(sock, jid, '❌ Por favor, escribe *confirmar* o *editar*.', ctx);
     }
+
+   
 }
 
 module.exports = {
     handleCartSummary,
     handleEnterAddress,
     handleEnterName,
+    handleEnterTelefono,
     handleEnterPaymentMethod,
     handleConfirmOrder,
     validateInput
+    
 };
