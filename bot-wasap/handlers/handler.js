@@ -83,76 +83,64 @@ function initializeUserSession(jid, ctx) {
     if (!ctx.sessions[jid].order) {
         ctx.sessions[jid].order = { items: [] };
     }
+    if (!ctx.sessions[jid].miaActivo) {
+    ctx.sessions[jid].miaActivo = true;   // Por defecto activa
+}
+if (!ctx.sessions[jid].erroresMIA) {
+    ctx.sessions[jid].erroresMIA = 0;     // Contador de errores consecutivos
+}
     return ctx.sessions[jid];
 }
 
 
 
 
+// RUTA: bot-wasap/handlers/handler.js
+
 async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
-    console.log("DEBUG: Entrando en handleNaturalLanguageOrder...");
-    logger.info(`[${jid}] -> Consultando a Gemini: "${text}"`);
+    logger.info(`[${jid}] -> Procesando con MIA: "${text}"`);
     const jsonResponse = await askGemini(ctx, text);
-console.log("DEBUG: Respuesta recibida de Gemini (texto plano):", jsonResponse);
+
     if (!jsonResponse) {
-        await say(sock, jid, 'Lo siento, no pude procesar tu mensaje. Intenta de nuevo.', ctx);
+        // ... (Tu lógica de error de MIA no cambia)
         return;
     }
 
     try {
         const orderInfo = JSON.parse(jsonResponse);
+        userSession.erroresMIA = 0;
 
-        if (orderInfo && orderInfo.respuesta_texto) {
-            // Caso 1: Gemini detectó una pregunta y nos dio la respuesta.
+        if (orderInfo.respuesta_texto) {
             await say(sock, jid, orderInfo.respuesta_texto, ctx);
-       } else if (orderInfo && orderInfo.items && orderInfo.items.length > 0) {
-    for (const item of orderInfo.items) {
-        // Guardamos notas/modificaciones si hay
-        if (item.modificaciones && item.modificaciones.length > 0) {
-            userSession.pendingNotes = item.modificaciones.join(', ');
+            return;
         }
 
-        // Si Gemini dio cantidad, la usamos, si no default 1
-        const cantidad = item.cantidad ? parseInt(item.cantidad) : 1;
+        if (orderInfo.items && orderInfo.items.length > 0) {
+            // Guardamos los datos de envío si MIA los encontró
+            if (orderInfo.direccion) userSession.order.address = orderInfo.direccion;
+            if (orderInfo.nombre) userSession.order.name = orderInfo.nombre;
 
-        // 🔎 Buscamos el producto en tu catálogo
-        await handleBrowseImages(sock, jid, item.producto, userSession, ctx);
+            // Procesamos cada item que encontró la IA
+            for (const item of orderInfo.items) {
+                if (item.modificaciones && item.modificaciones.length > 0) {
+                    userSession.order.notes = (userSession.order.notes || []).concat(item.modificaciones);
+                }
+                // Simplemente llamamos a la búsqueda y dejamos que el flujo normal continúe.
+                await handleBrowseImages(sock, jid, item.producto, userSession, ctx);
+            }
 
-        // Opcional: si el catálogo devuelve 1 match exacto, lo agregamos directo
-        if (userSession.currentProduct && userSession.phase === PHASE.SELECT_DETAILS) {
-            addToCart(ctx, jid, {
-                codigo: userSession.currentProduct.CodigoProducto,
-                nombre: userSession.currentProduct.NombreProducto,
-                precio: userSession.currentProduct.Precio_Venta,
-                sabores: item.sabores || [],
-                toppings: item.toppings || [],
-                notas: userSession.pendingNotes || ''
-            }, cantidad);
+            // --- BLOQUE DE CÓDIGO ELIMINADO ---
+            // Hemos quitado la lógica que decidía el siguiente paso de forma prematura.
+            // Ahora, el bot esperará a que termines de configurar el producto.
+            // ---------------------------------
 
-            await say(sock, jid, `✅ ¡Agregado automáticamente! *${cantidad}x* ${userSession.currentProduct.NombreProducto}`, ctx);
-
-            // Después de agregar, volvemos a fase browse
-            userSession.phase = PHASE.BROWSE_IMAGES;
-            userSession.currentProduct = null;
-        }
-    }
-
-    await say(sock, jid, '🛒 Si quieres ver tu pedido escribe *carrito* o *pagar*.', ctx);
-
-            
-            // Pasamos el NOMBRE OFICIAL del producto a nuestra función de búsqueda
-            await handleBrowseImages(sock, jid, firstItem.producto, userSession, ctx);
-             console.log(`DEBUG: handleBrowseImages fue llamado con el texto: "${text}"`);
         } else {
-            // Caso 3: Ni el bot ni Gemini entendieron.
-            await say(sock, jid, 'No estoy seguro de cómo ayudarte con eso. Escribe *menú* para ver las opciones que tengo.', ctx);
+            await say(sock, jid, 'No estoy seguro de cómo ayudarte. Escribe *menú* para ver las opciones.', ctx);
         }
     } catch (e) {
         logger.error(`[${jid}] -> Error al procesar JSON de Gemini: ${e.message}`);
-        await say(sock, jid, 'Hubo un problema al interpretar la respuesta de la IA. Intenta ser un poco más específico.', ctx);
     }
 }
-
 
 async function processIncomingMessage(sock, msg, ctx) {
     try {
@@ -161,23 +149,36 @@ async function processIncomingMessage(sock, msg, ctx) {
         const cleanedText = text.replace(/[^0-9]/g, '').trim();
         const t = text.toLowerCase().trim();
 
-        if (!text || !from || from.includes('status@broadcast') || from.includes('@g.us') || key.fromMe) return;
+        if (!text || !from || from.includes('status@broadcast') || from.includes('@g.us') || from.includes('@newsletter')|| key.fromMe) return;
         
         const jid = from;
 
         logConversation(jid, text);
 
-        if (jid === CONFIG.ADMIN_JID) {
-            switch (t) {
-                case 'disable':
-                    ctx.botEnabled = false;
-                    await say(sock, jid, '🔴 Bot desactivado.', ctx);
-                    return;
-                case 'enable':
-                    ctx.botEnabled = true;
-                    await say(sock, jid, '🟢 Bot activado.', ctx);
-                    return;
+if (jid === CONFIG.ADMIN_JID || jid === CONFIG.SOCIA_JID) {
+            if (t === 'yo continuo') {
+                const customerJid = userSession.lastCustomerJid;
+                if (customerJid) {
+                    ctx.mutedChats.add(customerJid);
+                    await say(sock, jid, `✅ Bot silenciado para el chat con ${customerJid.split('@')[0]}. Ya puedes hablar.`, ctx);
+                }
+                return;
             }
+            if (t === 'mia activa') {
+                const customerJid = userSession.lastCustomerJid;
+                if (customerJid && ctx.mutedChats.has(customerJid)) {
+                    ctx.mutedChats.delete(customerJid);
+                    await say(sock, jid, `✅ Bot reactivado para el chat con ${customerJid.split('@')[0]}.`, ctx);
+                    await say(sock, customerJid, '¡Hola! Soy MIA y estoy de vuelta para ayudarte. Escribe *menú* si lo necesitas.', ctx);
+                }
+                return;
+            }
+        }
+
+        if (ctx.mutedChats.has(jid)) {
+            const adminSession = initializeUserSession(CONFIG.ADMIN_JID, ctx);
+            adminSession.lastCustomerJid = jid;
+            return;
         }
         
         if (!ctx.botEnabled) return;
@@ -195,6 +196,19 @@ async function processIncomingMessage(sock, msg, ctx) {
             return;
         }
 
+        // --- COMANDOS MIA ---
+if (t === "yo continuo") {
+    userSession.miaActivo = false;
+    await say(sock, jid, "🚫 MIA desactivada. Chat en manos humanas.", ctx);
+    return;
+}
+
+if (t === "mia activa") {
+    userSession.miaActivo = true;
+    await say(sock, jid, "✅ ¡MIA reactivada! Continuemos con tu pedido 🍦", ctx);
+    return;
+}
+
         switch (userSession.phase) {
             case PHASE.SELECCION_OPCION:
                 const normalCommands = {
@@ -209,7 +223,11 @@ async function processIncomingMessage(sock, msg, ctx) {
                     const option = command || t;
                     await handleSeleccionOpcion(sock, jid, option, userSession, ctx);
                 } else {
-                    await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
+                     if (userSession.miaActivo) {
+            await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
+        } else {
+            await say(sock, jid, "🤖 MIA está desactivada. Escribe *mia activa* si quieres que la IA continúe.", ctx);
+        }
                 }
                 break;
             case PHASE.BROWSE_IMAGES:

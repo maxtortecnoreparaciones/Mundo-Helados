@@ -37,6 +37,7 @@ const startBot = async () => {
 
     const ctx = {
         sessions: {},
+        mutedChats: new Set(),
         carts: {},
         lastSent: {},
         botEnabled: true,

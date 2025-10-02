@@ -113,47 +113,49 @@ async function askGemini(ctx, question) {
 
     
     const genAI = new GoogleGenerativeAI(CONFIG.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-flash" ,generationConfig: {
+            responseMimeType: "application/json"},
+        
+    });
         
 
     const prompt = `
-                Eres "Mundo Bot", el asistente experto de la heladería "Mundo Helados".
+    Tu única tarea es analizar la petición de un cliente de la heladería "Mundo Helados" y devolver un objeto JSON.
 
-        **FAQ de Mundo Helados:**
-        - ¿Tienen sabor Ferrero? → Sí, está disponible en nuestra Malteada Especial.
-        - ¿Aceptan tarjeta de crédito? → Solo aceptamos pagos en Efectivo o por Transferencia (Nequi).
-        - ¿Cuánto demora el domicilio? → Entre 20 y 40 minutos.
-        - ¿Tienen helado de pistacho? → No, actualmente no.
-        - ¿Cuál es la dirección? → Cra 7h n 34 b 08.
-        - ¿Cuál es el horario? → Todos los días de 2:00 PM a 10:00 PM.
+        El JSON debe tener una de estas dos claves principales: "items" o "respuesta_texto".
 
-        TAREAS:
-        1. TOMA DE PEDIDOS: Si el cliente pide productos, devuelve un JSON con una lista "items".
-        2. RESPUESTA A PREGUNTAS: Si es una pregunta, responde en un JSON con la clave "respuesta_texto".
+        1.  Si es un PEDIDO, usa la clave "items". Cada item en la lista debe tener "producto", "cantidad" y "modificaciones".
+        2.  Si es una PREGUNTA o SALUDO, usa la clave "respuesta_texto".
 
-        EJEMPLOS:
-        - Petición: "Quiero una ensalada sin papaya" 
-          → {"items": [{"producto": "Ensalada de frutas", "cantidad": 1, "modificaciones": ["sin papaya"]}]}
+        EJEMPLOS CLAVE:
+        - Petición: "Quiero una ensalada sin papaya"
+        - JSON: {"items": [{"producto": "Ensalada de frutas", "cantidad": 1, "modificaciones": ["sin papaya"]}]}
+        
+        - Petición: "2 copas brownie y un agua para laura"
+        - JSON: {"items": [{"producto": "Copa Brownie", "cantidad": 2, "modificaciones": []}, {"producto": "Agua", "cantidad": 1, "modificaciones": []}], "nombre": "laura"}
 
-        - Petición: "Aceptan tarjeta?" 
-          → {"respuesta_texto": "Por el momento solo aceptamos Efectivo o Transferencia (Nequi) 😊."}
+        - Petición: "aceptan tarjeta?"
+        - JSON: {"respuesta_texto": "Por el momento solo aceptamos pagos en Efectivo o por Transferencia (Nequi) 😊."}
 
-        ---
+        - Petición: "hola que tal"
+        - JSON: {"respuesta_texto": "¡Holiii! 😊 ¿Te gustaría ver nuestro menú para antojarte de algo?"}
+
+        REGLA FINAL: Tu respuesta debe ser SIEMPRE y ÚNICAMENTE un objeto JSON válido. No incluyas texto adicional.
+
         Petición del cliente: "${question}"
-
-        RECUERDA:
-- Tu única salida debe ser un objeto JSON válido.
-- Siempre incluye la clave "cantidad". Si el cliente no dice cuántos, pon 1.
-- No incluyas ningún otro texto, saludo o explicación. Solo el JSON.
     `;
 
     try {
         const result = await model.generateContent(prompt);
         const response = await result.response;
-        let text = response.text().trim();
-        text = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
-return text;   // ✅ ahora sí devuelve el JSON limpio
-    ;
+        let textResponse = response.text().trim();
+
+        if (textResponse.startsWith('```json')) {
+            textResponse = textResponse.substring(7, textResponse.length - 3).trim();
+        }
+        
+        JSON.parse(textResponse);
+        return textResponse;
     } catch (error) {
         console.error("Error al interactuar con la API de Gemini:", error.message);
         // Devolvemos un JSON de error para no romper el flujo.

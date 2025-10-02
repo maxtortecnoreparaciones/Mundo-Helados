@@ -215,11 +215,13 @@ async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
 
             // Preparar datos para la API
             const detallesDelProducto = userSession.order.items.map(item => {
-                const saboresText = (item.sabores && item.sabores.length > 0) ? `Sabores: ${item.sabores.map(s => s.NombreProducto).join(', ')}` : '';
-                const toppingsText = (item.toppings && item.toppings.length > 0) ? `Toppings: ${item.toppings.map(t => t.NombreProducto).join(', ')}` : '';
-                let detalles = [saboresText, toppingsText].filter(Boolean).join('; ');
-                return `${item.nombre} ${detalles ? `(${detalles})` : ''} x${item.cantidad}`;
-            }).join(' | ');
+    const saboresText = (item.sabores && item.sabores.length > 0) ? `Sabores: ${item.sabores.map(s => s.NombreProducto).join(', ')}` : '';
+    const toppingsText = (item.toppings && item.toppings.length > 0) ? `Toppings: ${item.toppings.map(t => t.NombreProducto).join(', ')}` : '';
+    const obsText = item.observaciones ? `Obs: ${item.observaciones}` : '';
+
+    let detalles = [saboresText, toppingsText, obsText].filter(Boolean).join('; ');
+    return `${item.nombre} ${detalles ? `(${detalles})` : ''} x${item.cantidad}`;
+}).join(' | ');
 
             const orderData = {
                 nombre: userSession.order.name || '',
