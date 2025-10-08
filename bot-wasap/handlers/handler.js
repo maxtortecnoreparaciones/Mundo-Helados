@@ -97,18 +97,30 @@ if (!ctx.sessions[jid].erroresMIA) {
 
 // RUTA: bot-wasap/handlers/handler.js
 
+// RUTA: handlers/handler.js
 async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
     logger.info(`[${jid}] -> Procesando con MIA: "${text}"`);
     const jsonResponse = await askGemini(ctx, text);
 
     if (!jsonResponse) {
-        // ... (Tu lógica de error de MIA no cambia)
+        userSession.erroresMIA = (userSession.erroresMIA || 0) + 1;
+        if (userSession.erroresMIA >= 2) {
+            ctx.mutedChats.add(jid);
+            const notification = `🔔 ¡ATENCIÓN! 🔔\n\nEl cliente ${jid.split('@')[0]} necesita ayuda. MIA no entendió su petición dos veces.\nEl bot ha sido silenciado para este chat.\n\nPara reactivar, escribe: *mia activa*`;
+            const ADMINS_TO_NOTIFY = [CONFIG.ADMIN_JID, CONFIG.SOCIA_JID].filter(Boolean);
+            for (const adminJid of ADMINS_TO_NOTIFY) {
+                if (adminJid) await say(sock, adminJid, notification, ctx);
+            }
+            await say(sock, jid, 'Lo siento, no logro entender. Un agente humano ha sido notificado y te ayudará en breve.', ctx);
+        } else {
+            await say(sock, jid, 'No te entendí muy bien, ¿podrías decirlo de otra forma?', ctx);
+        }
         return;
     }
 
     try {
         const orderInfo = JSON.parse(jsonResponse);
-        userSession.erroresMIA = 0;
+        userSession.erroresMIA = 0; // Reinicia el contador si la IA entiende
 
         if (orderInfo.respuesta_texto) {
             await say(sock, jid, orderInfo.respuesta_texto, ctx);
@@ -116,26 +128,26 @@ async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
         }
 
         if (orderInfo.items && orderInfo.items.length > 0) {
-            // Guardamos los datos de envío si MIA los encontró
+            for (const item of orderInfo.items) {
+                await handleBrowseImages(sock, jid, item.producto, userSession, ctx, item.cantidad, item.modificaciones);
+            }
+
             if (orderInfo.direccion) userSession.order.address = orderInfo.direccion;
             if (orderInfo.nombre) userSession.order.name = orderInfo.nombre;
 
-            // Procesamos cada item que encontró la IA
-            for (const item of orderInfo.items) {
-                if (item.modificaciones && item.modificaciones.length > 0) {
-                    userSession.order.notes = (userSession.order.notes || []).concat(item.modificaciones);
-                }
-                // Simplemente llamamos a la búsqueda y dejamos que el flujo normal continúe.
-                await handleBrowseImages(sock, jid, item.producto, userSession, ctx);
+            // Decidimos cuál es el siguiente paso lógico
+            if (!userSession.order.address) {
+                userSession.phase = PHASE.CHECK_DIR;
+                await say(sock, jid, '¡Pedido(s) añadido(s)! Para continuar, por favor, dime tu dirección completa.', ctx);
+            } else if (!userSession.order.name) {
+                userSession.phase = PHASE.CHECK_NAME;
+                await say(sock, jid, '¡Entendido! Ahora, ¿a nombre de quién va el pedido?', ctx);
+            } else {
+                userSession.phase = PHASE.CHECK_TELEFONO;
+                await say(sock, jid, '¡Casi listos! ¿Cuál es tu número de teléfono para la entrega?', ctx);
             }
-
-            // --- BLOQUE DE CÓDIGO ELIMINADO ---
-            // Hemos quitado la lógica que decidía el siguiente paso de forma prematura.
-            // Ahora, el bot esperará a que termines de configurar el producto.
-            // ---------------------------------
-
         } else {
-            await say(sock, jid, 'No estoy seguro de cómo ayudarte. Escribe *menú* para ver las opciones.', ctx);
+             await say(sock, jid, 'No estoy seguro de cómo ayudarte. Escribe *menú* para ver las opciones.', ctx);
         }
     } catch (e) {
         logger.error(`[${jid}] -> Error al procesar JSON de Gemini: ${e.message}`);
@@ -154,6 +166,8 @@ async function processIncomingMessage(sock, msg, ctx) {
         const jid = from;
 
         logConversation(jid, text);
+
+
 
 if (jid === CONFIG.ADMIN_JID || jid === CONFIG.SOCIA_JID) {
             if (t === 'yo continuo') {
@@ -316,8 +330,8 @@ async function sendMainMenu(sock, jid, ctx) {
 Como estas? Somos heladeria mundo helados en riohacha🍦
 
 *1)* 🛍️ Ver nuestro menú y hacer un pedido
-*2)* 📍 Dirección y horarios
-*3)* 📦 Pedidos por encargo (litros, eventos y grandes cantidades)
+*2)* 📦 Pedidos por encargo (litros, eventos y grandes cantidades)
+*3)* 📍 Dirección y horarios
 
 _Escribe el número de la opción (1, 2 o 3)._`;
     await say(sock, jid, welcomeMessage, ctx);

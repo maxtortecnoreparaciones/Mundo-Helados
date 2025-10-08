@@ -151,7 +151,7 @@ async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
         if (fs.existsSync(qrPath)) {
             await sendImage(sock, jid, qrPath, 'Escanea el siguiente código QR para realizar el pago. Recuerda enviarnos la imagen del pago por favor.', ctx);
         } else {
-            await say(sock, jid, 'Realiza el pago a Nequi 123456789. Recuerda enviarnos el comprobante.', ctx);
+            await say(sock, jid, 'Realiza el pago a Nequi 313 6939663. Recuerda enviarnos el comprobante.', ctx);
         }
     }
 
@@ -179,90 +179,47 @@ async function handleEnterPaymentMethod(sock, jid, input, userSession, ctx) {
 async function handleConfirmOrder(sock, jid, input, userSession, ctx) {
     const confirmation = input.toLowerCase().trim();
 
-    // Redirige las opciones numéricas a la lógica de confirmación del pedido
-    if (['1', '2', '3', '4'].includes(confirmation) && userSession.phase === PHASE.CONFIRM_ORDER) {
-        switch (confirmation) {
-            case '1':
-                // Continuar con la confirmación
-                break;
-            case '2':
-                userSession.phase = PHASE.BROWSE_IMAGES;
-                await say(sock, jid, 'Claro, puedes seguir comprando. Escribe el nombre de otro producto o "menú" para ver las opciones.', ctx);
-                return;
-            case '3': // Editar (Próximamente)
-                await say(sock, jid, 'La función para editar el pedido estará disponible pronto. Por ahora, puedes cancelar y empezar de nuevo escribiendo "menú".', ctx);
-                return;
-            case '4': // Vaciar carrito
-                userSession.order.items = [];
-                userSession.phase = PHASE.BROWSE_IMAGES;
-                await say(sock, jid, '🗑️ Tu carrito ha sido vaciado. ¡Empecemos de nuevo! Escribe "menú".', ctx);
-                return;
-        }
-    }
+    // --- LÓGICA INTELIGENTE MEJORADA ---
+    switch (confirmation) {
+        case '1':
+        case 'confirmar':
+            // Si el usuario confirma, iniciamos el proceso de pedir datos
+            userSession.phase = PHASE.CHECK_DIR;
+            await say(sock, jid, '¡Perfecto! Para continuar con el envío, por favor, escribe tu *dirección completa*.', ctx);
+            break;
+        
+        case '2':
+        case 'seguir comprando':
+            // Si quiere seguir comprando, lo devolvemos a la fase de búsqueda
+            userSession.phase = PHASE.BROWSE_IMAGES;
+            await say(sock, jid, '¡Claro! Escribe el nombre del siguiente producto que deseas añadir.', ctx);
+            break;
 
-
-    if (validateInput(confirmation, 'confirmation')) {
-        try {
-            if (!userSession.order.items || userSession.order.items.length === 0) {
-                await say(sock, jid, '⚠️ Tu carrito está vacío. No se puede confirmar un pedido sin productos.', ctx);
-                resetChat(jid, ctx);
-                return;
-            }
-
-            // CAMBIO 4: Se utiliza la nueva función interna `generateCartSummary`.
-            const summary = generateCartSummary(userSession);
-            const orderTotal = summary.total + (userSession.order.deliveryCost || 0);
-
-            // Preparar datos para la API
-            const detallesDelProducto = userSession.order.items.map(item => {
-    const saboresText = (item.sabores && item.sabores.length > 0) ? `Sabores: ${item.sabores.map(s => s.NombreProducto).join(', ')}` : '';
-    const toppingsText = (item.toppings && item.toppings.length > 0) ? `Toppings: ${item.toppings.map(t => t.NombreProducto).join(', ')}` : '';
-    const obsText = item.observaciones ? `Obs: ${item.observaciones}` : '';
-
-    let detalles = [saboresText, toppingsText, obsText].filter(Boolean).join('; ');
-    return `${item.nombre} ${detalles ? `(${detalles})` : ''} x${item.cantidad}`;
-}).join(' | ');
-
-            const orderData = {
-                nombre: userSession.order.name || '',
-                telefono: jid.replace('@s.whatsapp.net', ''),
-                direccion: userSession.order.address || '',
-                monto: orderTotal,
-                producto: detallesDelProducto,
-                pago: userSession.order.paymentMethod || 'Pendiente',
-                // ...otros campos
-            };
-            logger.info(`[${jid}] -> Datos a enviar a la API: ${JSON.stringify(orderData, null, 2)}`);
+        case '3':
+        case 'editar':
+            // Si quiere editar, vaciamos el carrito y lo devolvemos a la búsqueda
+            userSession.order.items = [];
+            userSession.order.notes = [];
+            userSession.phase = PHASE.BROWSE_IMAGES;
+            await say(sock, jid, '✏️ Entendido. He vaciado tu carrito. Por favor, escribe el nombre del primer producto que deseas ordenar.', ctx);
+            break;
             
-            // Envío a la API
-            // 1. Construimos la URL completa uniendo la base y el endpoint
-const fullUrl = CONFIG.API_BASE + CONFIG.ENDPOINTS.REGISTRAR_CONFIRMACION;
-
-// 2. Usamos la URL completa en la llamada a axios
-await axios.post(fullUrl, orderData);
-
-            await say(sock, jid, '🎉 ¡Tu pedido ha sido confirmado! Un agente se contactará contigo para coordinar la entrega. ¡Gracias por tu compra!', ctx);
-            
-            const orderInfoForAdmin = `🆕 NUEVO PEDIDO:\nCliente: ${jid.replace('@s.whatsapp.net', '')}\nNombre: ${userSession.order.name}\nDirección: ${userSession.order.address}\nMétodo de pago: ${userSession.order.paymentMethod}\nTotal: ${money(orderTotal)}\n\n*Productos:*\n${summary.text}`;
-            await say(sock, CONFIG.ADMIN_JID, orderInfoForAdmin, ctx);
-
+        case '4':
+        case 'vaciar':
+        case 'cancelar':
+             // Si quiere cancelar, vaciamos el carrito y lo mandamos al menú principal
             resetChat(jid, ctx);
+            await say(sock, jid, '🗑️ Tu pedido ha sido cancelado.', ctx);
+            await sendMainMenu(sock, jid, ctx);
+            break;
 
-        } catch (error) {
-            
-             logger.error(`[${jid}] -> Error al enviar a la API. Causa: ${error.message}`);
-            await say(sock, jid, '⚠️ Ocurrió un error al procesar el pedido. Por favor, contacta directamente con nosotros.', ctx);
-        }
-
-    } else if (confirmation === 'editar') {
-        await say(sock, jid, '📝 Para editar, empecemos de nuevo con los datos de entrega. Por favor, escribe tu *dirección*:', ctx);
-        userSession.phase = PHASE.CHECK_DIR;
-    } else {
-        userSession.errorCount++;
-        await say(sock, jid, '❌ Por favor, escribe *confirmar* o *editar*.', ctx);
+        default:
+            // Si no es ninguna de las opciones, asumimos que es un producto nuevo
+            logger.info(`[${jid}] -> El usuario no eligió opción, asumiendo búsqueda de producto: "${input}"`);
+            userSession.phase = PHASE.BROWSE_IMAGES;
+            await handleBrowseImages(sock, jid, input, userSession, ctx);
+            break;
     }
-
-   
 }
 
 module.exports = {
