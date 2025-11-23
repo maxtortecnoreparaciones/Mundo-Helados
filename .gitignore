@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ﻿# Archivo .gitignore - Versión Definitiva
 
 # Dependencias de Node.js
@@ -25,6 +26,30 @@ service_account.json
 __pycache__/
 *.pyc
 db.sqlite3
+=======
+﻿# Archivo .gitignore para Node.js y Python/Django
+
+# Node.js
+/node_modules
+.env
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python / Django
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+db.sqlite3
+/media/
+/static/
+
+# Archivos de Sesión de Baileys
+/auth_info_baileys.json
+/creds.json
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
 
 # Archivos del Sistema Operativo
 .DS_Store

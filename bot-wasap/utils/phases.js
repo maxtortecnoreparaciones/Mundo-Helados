@@ -13,7 +13,10 @@ const PHASE = {
     // Fases del proceso de pago (Checkout)
     CHECK_DIR: 'check_dir',
     CHECK_NAME: 'check_name',
+<<<<<<< HEAD
     CHECK_TELEFONO: 'check_telefono',
+=======
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     CHECK_PAGO: 'check_pago',
     CONFIRM_ORDER: 'confirm_order',
 

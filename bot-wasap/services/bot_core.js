@@ -1,10 +1,19 @@
+<<<<<<< HEAD
+=======
+// services/bot_core.js - ACTUALIZADO
+
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
 'use strict';
 
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const { logConversation } = require('../utils/logger');
+<<<<<<< HEAD
 const { sleep, money, normalizeText } = require('../utils/util');
+=======
+const { sleep, money } = require('../utils/util');
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
 
 const CONFIG = require('../config.json');
 
@@ -102,6 +111,7 @@ async function sendImage(sock, jid, imagePath, caption, ctx) {
     }
 }
 
+<<<<<<< HEAD
 // RUTA: services/bot_core.js
 
 // AÑADE ESTA NUEVA FUNCIÓN
@@ -203,6 +213,33 @@ async function askGemini(ctx, question) {
     } catch (error) {
         console.error("Error al interactuar o procesar JSON de Gemini:", error.message);
         return JSON.stringify({ "respuesta_texto": "Lo siento, no entendí muy bien. ¿Podrías intentarlo de nuevo? O simplemente escribe *menú*." });
+=======
+async function askGemini(ctx, question) {
+    // Tu función askGemini no necesita cambios
+    const model = ctx.gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const prompt = `Eres un asistente de ventas muy amigable y experto en helados. Responde la siguiente pregunta o comentario como si fueras el bot de heladería 'Mundo Helados' en Riohacha. Mantén tus respuestas concisas y amigables. No menciones que eres una IA. Si te preguntan algo fuera de helados o la heladería, responde de forma educada que tu especialidad es el helado.
+    
+    Ejemplo de preguntas y respuestas:
+    - Pregunta: "jajaja a dormir puesss"
+    - Respuesta: "¡Que tengas una excelente noche! ✨ Cuando estés listo para tu helado, solo escribe *menú*."
+
+    - Pregunta: "cuanto valen las fresas"
+    - Respuesta: "Las fresas frescas (topping T1) no tienen costo adicional."
+
+    - Pregunta: "horarios, no analiza la conversacion por que sigue sin responder varias preguntas"
+    - Respuesta: "¡Lo siento! Estoy aprendiendo a mejorar mi conversación. Para saber nuestros horarios, la dirección es *Cra 7h n 34 b 08* y el horario de atención es de 2:00 PM a 10:00 PM todos los días."
+
+    Pregunta/Comentario del cliente: "${question}"
+    
+    Respuesta:`;
+    try {
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        return response.text();
+    } catch (error) {
+        console.error("Error al interactuar con la API de Gemini:", error.message);
+        return "¡Uy! Parece que mis circuitos se enredaron. 😅 Por favor, intenta de nuevo.";
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     }
 }
 
@@ -213,6 +250,7 @@ async function askGemini(ctx, question) {
 // la cantidad si el producto no tiene opciones. Esto desbloquea la conversación.
 // =================================================================================
 async function handleProductSelection(sock, jid, producto, ctx) {
+<<<<<<< HEAD
     // Guarda el producto actual (ya "traducido") en la sesión del usuario
     ctx.sessions[jid].currentProduct = producto;
 
@@ -224,16 +262,33 @@ async function handleProductSelection(sock, jid, producto, ctx) {
     const numSabores = producto.numero_de_sabores;
     const numToppings = producto.numero_de_toppings;
 
+=======
+    // 1. Guarda el producto actual en la sesión del usuario
+    ctx.sessions[jid].currentProduct = producto;
+
+    // 2. Construye el mensaje de respuesta paso a paso
+    let mensaje = `Has seleccionado: *${producto.NombreProducto}* — COP$${money(producto.Precio_Venta)}\n${producto.Descripcion || ''}`;
+
+    const numSabores = parseInt(producto.Numero_de_Sabores || 0);
+    const numToppings = parseInt(producto.Numero_de_Toppings || 0);
+
+    // 3. Añade la sección de SABORES si el producto los requiere
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     if (numSabores > 0 && ctx.saboresYToppings && ctx.saboresYToppings.sabores) {
         mensaje += `\n\n*Elige ${numSabores} sabor${numSabores > 1 ? 'es' : ''} de la lista (ej: S1, S3):*\n`;
         mensaje += ctx.saboresYToppings.sabores.map((s, i) => `*S${i + 1})* ${s.NombreProducto}`).join('\n');
     }
 
+<<<<<<< HEAD
+=======
+    // 4. Añade la sección de TOPPINGS si el producto los requiere
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     if (numToppings > 0 && ctx.saboresYToppings && ctx.saboresYToppings.toppings) {
         mensaje += `\n\n*Elige hasta ${numToppings} topping${numToppings > 1 ? 's' : ''} (ej: T1, T2):*\n`;
         mensaje += ctx.saboresYToppings.toppings.map((t, i) => `*T${i + 1})* ${t.NombreProducto}`).join('\n');
     }
 
+<<<<<<< HEAD
     if (numSabores > 0 || numToppings > 0) {
         mensaje += `\n\n_Para elegir, escribe los códigos separados por comas o espacio (ej: S1, T2). Si no deseas ninguno, escribe **sin nada**._`;
     } else {
@@ -241,6 +296,24 @@ async function handleProductSelection(sock, jid, producto, ctx) {
     }
 
     await say(sock, jid, mensaje, ctx);
+=======
+    // 5. Añade las instrucciones finales
+    if (numSabores > 0 || numToppings > 0) {
+        mensaje += `\n\n_Para elegir, escribe los códigos separados por comas o espacio (ej: S1, T2). Si no deseas ninguno, escribe **sin nada**._`;
+        // La fase la controla el handler.js, que la pondrá en 'select_details'
+    } else {
+        // Si el producto no tiene opciones, preguntamos directamente la cantidad
+        mensaje += `\n\n🔢 ¿Cuántas unidades de este producto quieres?`;
+        // El handler.js cambiará la fase a 'select_details'. La lógica en esa fase
+        // deberá ser lo suficientemente inteligente para saltar a 'select_quantity'.
+        // O mejor aún, el handler puede manejar esto. Por ahora, esto desbloquea la conversación.
+    }
+
+    // 6. Envía el mensaje completo al usuario
+    await say(sock, jid, mensaje, ctx);
+
+    // CAMBIO 3: La función `addToCart` duplicada que estaba aquí ha sido eliminada.
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
 }
 
 

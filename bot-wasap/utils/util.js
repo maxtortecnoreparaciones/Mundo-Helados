@@ -1,5 +1,8 @@
+<<<<<<< HEAD
 'use strict';
 
+=======
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
 const axios = require('axios');
 const CONFIG = require('../config.json');
 
@@ -7,13 +10,20 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+<<<<<<< HEAD
 function normalizeText(text) {
+=======
+function normalizarMensaje(text) {
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     if (typeof text !== 'string') return '';
     return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 }
 
 function money(number) {
+<<<<<<< HEAD
     if (isNaN(number)) return '$ 0';
+=======
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     return new Intl.NumberFormat('es-CO', {
         style: 'currency',
         currency: 'COP',
@@ -31,7 +41,11 @@ function parsePrice(price) {
 
 function parseProductAndQuantity(text) {
     const defaultQuantity = 1;
+<<<<<<< HEAD
     const tokens = normalizeText(text).split(' '); 
+=======
+    const tokens = normalizarMensaje(text).split(' ');
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     let quantity = defaultQuantity;
     let productName = text;
 
@@ -49,11 +63,19 @@ function parseProductAndQuantity(text) {
 
 async function getDeliveryCost(address) {
     try {
+<<<<<<< HEAD
         const urlCompleta = CONFIG.API_BASE + CONFIG.ENDPOINTS.DELIVERY_COST;
         const response = await axios.get(urlCompleta, {
             params: { q: address },
             timeout: 10000 
         });
+=======
+        const response = await axios.get(CONFIG.API_BASE + '/' + CONFIG.ENDPOINTS.DELIVERY_COST, {
+            params: { q: address },
+            timeout: 10000 
+        });
+
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
         if (response.data && response.data.costo) {
             return parsePrice(response.data.costo);
         } else {
@@ -66,18 +88,30 @@ async function getDeliveryCost(address) {
 }
 
 function isGreeting(t) {
+<<<<<<< HEAD
     const greetings = CONFIG.KEYWORDS.GREETINGS;
+=======
+    const greetings = ['hola', 'holas', 'buenas', 'hi', 'hey', 'hello', 'que mas'];
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     return greetings.some(greeting => t.includes(greeting));
 }
 
 function wantsMenu(t) {
+<<<<<<< HEAD
     const menuRequests = CONFIG.KEYWORDS.MENU_REQUESTS;
+=======
+    const menuRequests = ['menu', 'catalogo', 'carta', 'productos', 'quiero comprar'];
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     return menuRequests.some(request => t.includes(request));
 }
 
 module.exports = {
     sleep,
+<<<<<<< HEAD
     normalizeText, 
+=======
+    normalizarMensaje,
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
     money,
     parsePrice,
     parseProductAndQuantity,

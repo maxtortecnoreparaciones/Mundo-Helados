@@ -17,6 +17,13 @@ yarn-error.log*
 # Archivos del Sistema Operativo
 .DS_Store
 Thumbs.db
+<<<<<<< HEAD
 
 # Claves de Servicios de Google
 service_account.json
+=======
+>>>>>>> d70a1ee (refactor: Elimina submódulo y añade backend de Django)
+
+# Archivos de Sesión y Claves Secretas
+service_account.json
+bot-wasap/auth_info_baileys/
