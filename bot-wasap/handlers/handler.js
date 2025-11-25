@@ -353,13 +353,13 @@ async function handleSeleccionOpcion(sock, jid, input, userSession, ctx) {
             userSession.errorCount = 0;
             break;
 
-        case '2':
+        case '3':
             await say(sock, jid, `📍 *Nuestra ubicación:* Cra 7h n 34 b 08\n🕐 *Horario de atención:* Todos los días de 2:00 PM a 10:00 PM`, ctx);
             await sleep(1500);
             await sendMainMenu(sock, jid, ctx);
             break;
 
-        case '3':
+        case '2':
             await startEncargoBrowse(sock, jid, ctx);
             userSession.phase = PHASE.ENCARGO;
             break;
