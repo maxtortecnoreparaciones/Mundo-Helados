@@ -24,3 +24,4 @@ db.sqlite3
 # Archivos del Sistema Operativo
 .DS_Store
 Thumbs.db
+service_account.json
