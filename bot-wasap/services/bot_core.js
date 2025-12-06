@@ -35,7 +35,9 @@ function resetChat(jid, ctx) {
         saboresSeleccionados: [],
         toppingsSeleccionados: [],
         lastMatches: [],
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        adminNotified: false,
+        miaActivo: true
     };
     console.log(`Sesión y carrito reseteados para ${jid}`);
 }

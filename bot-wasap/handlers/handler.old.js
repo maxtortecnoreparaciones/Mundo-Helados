@@ -43,10 +43,7 @@ function normalizeText(text) {
 const processedMessages = new Map();
 const MESSAGE_CACHE_DURATION = 5 * 60 * 1000;
 
-// Track background intervals so tests can clear them and allow process to exit
-let _backgroundIntervals = [];
-
-const processedMessagesCleanupInterval = setInterval(() => {
+setInterval(() => {
     const now = Date.now();
     for (const [key, timestamp] of processedMessages.entries()) {
         if (now - timestamp > MESSAGE_CACHE_DURATION) {
@@ -54,7 +51,6 @@ const processedMessagesCleanupInterval = setInterval(() => {
         }
     }
 }, MESSAGE_CACHE_DURATION);
-_backgroundIntervals.push(processedMessagesCleanupInterval);
 
 function shouldResetForInactivity(userSession, currentTime) {
     const timeSinceLastActivity = currentTime - userSession.lastPromptAt;
@@ -172,42 +168,9 @@ async function processIncomingMessage(sock, msg, ctx) {
 
         logConversation(jid, text);
 
-        const userSession = initializeUserSession(jid, ctx);
-        userSession.lastPromptAt = Date.now();
-        logger.info(`[${jid}] -> Fase actual: ${userSession.phase}. Mensaje recibido: "${text}"`);
 
-        // Si el usuario ha tenido 2 o más errores consecutivos, notificar a los administradores
-        if (userSession.errorCount >= 2 && !userSession.adminNotified) {
-            userSession.adminNotified = true;
-            const admins = CONFIG.ADMIN_JIDS || [];
-            const chatLink = `https://wa.me/${jid.split('@')[0]}`;
-            const adminMsg = `🔔 Atención: Cliente con dificultades.\n\nCliente: ${jid.split('@')[0]}\nÚltimo mensaje: "${text}"\nAbrir chat: ${chatLink}\n\nPor favor, toma el control de este chat.`;
 
-            for (const admin of admins) {
-                try {
-                    await say(sock, admin, adminMsg, ctx);
-                } catch (notifyError) {
-                    logger.error(`Error notificando al admin ${admin}: ${notifyError.message}`);
-                }
-            }
-
-            // Silenciar el bot para este chat para que el humano se haga cargo
-            try {
-                if (!ctx.mutedChats) ctx.mutedChats = new Set();
-                ctx.mutedChats.add(jid);
-            } catch (e) {
-                logger.error(`Error al añadir chat a mutedChats: ${e.message}`);
-            }
-
-            // Avisar al usuario que un agente humano ha sido notificado
-            try {
-                await say(sock, jid, 'Lo siento, parece que necesitas ayuda. Un agente humano ha sido notificado y te ayudará en breve.', ctx);
-            } catch (e) {
-                logger.error(`Error enviando notificación al usuario ${jid}: ${e.message}`);
-            }
-        }
-
-        if (jid === CONFIG.ADMIN_JID || jid === CONFIG.SOCIA_JID) {
+if (jid === CONFIG.ADMIN_JID || jid === CONFIG.SOCIA_JID) {
             if (t === 'yo continuo') {
                 const customerJid = userSession.lastCustomerJid;
                 if (customerJid) {
@@ -216,31 +179,12 @@ async function processIncomingMessage(sock, msg, ctx) {
                 }
                 return;
             }
-            if (t === 'mia activa' || t === 'mia continua') {
+            if (t === 'mia activa') {
                 const customerJid = userSession.lastCustomerJid;
                 if (customerJid && ctx.mutedChats.has(customerJid)) {
                     ctx.mutedChats.delete(customerJid);
                     await say(sock, jid, `✅ Bot reactivado para el chat con ${customerJid.split('@')[0]}.`, ctx);
                     await say(sock, customerJid, '¡Hola! Soy MIA y estoy de vuelta para ayudarte. Escribe *menú* si lo necesitas.', ctx);
-
-                    // --- NEW: ensure customer's session is unblocked and reset critical flags ---
-                    try {
-                        const custSession = ctx.sessions[customerJid] || initializeUserSession(customerJid, ctx);
-                        logger.info(`[DEBUG] before reset - ${customerJid} adminNotified=${custSession.adminNotified} errorCount=${custSession.errorCount} erroresMIA=${custSession.erroresMIA}`);
-                        // Directly set fields to avoid relying on defaults
-                        custSession.adminNotified = false;
-                        custSession.errorCount = 0;
-                        custSession.erroresMIA = 0;
-                        custSession.miaActivo = true;
-                        custSession.lastPromptAt = Date.now();
-                        // Persist back just in case
-                        ctx.sessions[customerJid] = custSession;
-                        logger.info(`[DEBUG] after reset - ${customerJid} adminNotified=${custSession.adminNotified} errorCount=${custSession.errorCount} erroresMIA=${custSession.erroresMIA}`);
-
-                        logger.info(`[${customerJid}] -> Admin reactivó el chat. adminNotified reset, errorCount cleared, MIA re-enabled.`);
-                    } catch (e) {
-                        logger.error(`Error al resetear la sesión del cliente ${customerJid}: ${e.message}`);
-                    }
                 }
                 return;
             }
@@ -256,6 +200,10 @@ async function processIncomingMessage(sock, msg, ctx) {
         
         if (processedMessages.has(key.id)) return;
         processedMessages.set(key.id, Date.now());
+
+        const userSession = initializeUserSession(jid, ctx);
+        userSession.lastPromptAt = Date.now();
+        logger.info(`[${jid}] -> Fase actual: ${userSession.phase}. Mensaje recibido: "${text}"`);
 
         if (isGreeting(t) || wantsMenu(t)) {
             resetChat(jid, ctx);
@@ -276,82 +224,80 @@ if (t === "mia activa") {
     return;
 }
 
-        switch (userSession.phase) {
-            case PHASE.SELECCION_OPCION:
-                const normalCommands = {
-                    'menu': '1', 'ver menu': '1', 'productos': '1', 'carta': '1',
-                    'direccion': '2', 'horario': '2', 'ubicacion': '2',
-                    'encargo': '3', 'eventos': '3', 'litros': '3'
-                };
-                const command = normalCommands[t];
-                const menuOptions = ['1', '2', '3'];
+    switch (userSession.phase) {
+        case PHASE.SELECCION_OPCION:
+            const normalCommands = {
+                'menu': '1', 'ver menu': '1', 'productos': '1', 'carta': '1',
+                'direccion': '2', 'horario': '2', 'ubicacion': '2',
+                'encargo': '3', 'eventos': '3', 'litros': '3'
+            };
+            const command = normalCommands[t];
+            const menuOptions = ['1', '2', '3'];
 
-                if (command || menuOptions.includes(t)) {
-                    const option = command || t;
-                    await handleSeleccionOpcion(sock, jid, option, userSession, ctx);
+            if (command || menuOptions.includes(t)) {
+                const option = command || t;
+                await handleSeleccionOpcion(sock, jid, option, userSession, ctx);
+            } else {
+                 if (userSession.miaActivo) {
+                    await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
                 } else {
-                     if (userSession.miaActivo) {
-            await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
-        } else {
-            await say(sock, jid, "🤖 MIA está desactivada. Escribe *mia activa* si quieres que la IA continúe.", ctx);
-        }
+                    await say(sock, jid, "🤖 MIA está desactivada. Escribe *mia activa* si quieres que la IA continúe.", ctx);
                 }
-                break;
-            case PHASE.BROWSE_IMAGES:
-    const postAddOptions = ['pagar', 'carrito', 'menu', '1', '2', '3'];
+            }
+            break;
+        case PHASE.BROWSE_IMAGES:
+            const postAddOptions = ['pagar', 'carrito', 'menu', '1', '2', '3'];
 
-    if (postAddOptions.includes(t)) {
-        if (t === 'pagar' || t === 'carrito' || t === '1') {
-            await handleCartSummary(sock, jid, userSession, ctx);
-        } else if (t === '2') {
-            await say(sock, jid, '¡Perfecto! Escribe el nombre del siguiente producto que deseas añadir.', ctx);
-        } else if (t === 'menu' || t === '3') {
-            resetChat(jid, ctx);
-            await sendMainMenu(sock, jid, ctx);
-        }
-    } else {
-        await handleBrowseImages(sock, jid, t, userSession, ctx);
+            if (postAddOptions.includes(t)) {
+                if (t === 'pagar' || t === 'carrito' || t === '1') {
+                    await handleCartSummary(sock, jid, userSession, ctx);
+                } else if (t === '2') {
+                    await say(sock, jid, '¡Perfecto! Escribe el nombre del siguiente producto que deseas añadir.', ctx);
+                } else if (t === 'menu' || t === '3') {
+                    resetChat(jid, ctx);
+                    await sendMainMenu(sock, jid, ctx);
+                } else {
+                    // Si no es una opción, es una búsqueda de producto.
+                    await handleBrowseImages(sock, jid, t, userSession, ctx);
+                }
+            } else {
+                await handleBrowseImages(sock, jid, t, userSession, ctx);
+            }
+            break;
+        case PHASE.SELECCION_PRODUCTO:
+            await handleSeleccionProducto(sock, jid, t, userSession, ctx);
+            break;
+        case PHASE.SELECT_DETAILS:
+            await handleSelectDetails(sock, jid, t, userSession, ctx);
+            break;
+        case PHASE.SELECT_QUANTITY:
+            await handleSelectQuantity(sock, jid, cleanedText, userSession, ctx);
+            break;
+        case PHASE.CHECK_DIR:
+            await handleEnterAddress(sock, jid, text, userSession, ctx);
+            break;
+        case PHASE.CHECK_NAME:
+            await handleEnterName(sock, jid, text, userSession, ctx);
+            break;
+        case PHASE.CHECK_TELEFONO:
+            await handleEnterTelefono(sock, jid, text, userSession, ctx);
+            break;
+        case PHASE.CHECK_PAGO:
+            await handleEnterPaymentMethod(sock, jid, text, userSession, ctx);
+            break;
+        case PHASE.CONFIRM_ORDER:
+            await handleConfirmOrder(sock, jid, t, userSession, ctx);
+            break;
+        case PHASE.FINALIZE_ORDER:
+            await handleFinalizeOrder(sock, jid, t, userSession, ctx);
+            break;
+        case PHASE.ENCARGO:
+            await handleEncargo(sock, jid, t, userSession, ctx);
+            break;
+        default:
+            await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
+            break;
     }
-    break;
-            case PHASE.SELECCION_PRODUCTO:
-                await handleSeleccionProducto(sock, jid, t, userSession, ctx);
-                break;
-            case PHASE.SELECT_DETAILS:
-                await handleSelectDetails(sock, jid, t, userSession, ctx);
-                break;
-            case PHASE.SELECT_QUANTITY:
-                await handleSelectQuantity(sock, jid, cleanedText, userSession, ctx);
-                break;
-            case PHASE.CHECK_DIR:
-                await handleEnterAddress(sock, jid, text, userSession, ctx);
-                break;
-            case PHASE.CHECK_NAME:
-                await handleEnterName(sock, jid, text, userSession, ctx);
-                break;
-            case PHASE.CHECK_TELEFONO:
-                await handleEnterTelefono(sock, jid, text, userSession, ctx);
-                break;
-            case PHASE.CHECK_PAGO:
-                await handleEnterPaymentMethod(sock, jid, text, userSession, ctx);
-                break;
-            case PHASE.CONFIRM_ORDER:
-                await handleConfirmOrder(sock, jid, t, userSession, ctx);
-                break;
-            case PHASE.FINALIZE_ORDER:
-                await handleFinalizeOrder(sock, jid, t, userSession, ctx);
-                break;
-            case PHASE.ENCARGO:
-                await handleEncargo(sock, jid, t, userSession, ctx);
-                break;
-            default:
-                // CORRECCIÓN: Si la fase es desconocida o undefined, es más seguro resetear.
-                // Esto evita que se llame a la IA con entradas inesperadas (como un número de teléfono).
-                logger.warn(`[${jid}] -> Fase desconocida o nula: '${userSession.phase}'. Reseteando al menú principal.`);
-                await say(sock, jid, '🤔 Parece que nos perdimos un poco. Volvamos al inicio.', ctx);
-                resetChat(jid, ctx);
-                await sendMainMenu(sock, jid, ctx);
-                break;
-        }
     } catch (error) {
         console.error('Error al procesar mensaje:', error);
         logUserError(msg.from, 'main_handler', msg.text, error.stack);
@@ -501,7 +447,6 @@ async function handleSelectDetails(sock, jid, input, userSession, ctx) {
     if (input.toLowerCase().includes('sin') || input === '0') {
         userSession.saboresSeleccionados = [];
         userSession.toppingsSeleccionados = [];
-        // No hay más que hacer aquí, salimos para el siguiente paso.
     } else {
         for (const option of selectedOptions) {
             const upperOption = option.toUpperCase();
@@ -514,7 +459,14 @@ async function handleSelectDetails(sock, jid, input, userSession, ctx) {
                 const toppingIndex = parseInt(upperOption.substring(1)) - 1;
                 if (toppingIndex >= 0 && toppingIndex < producto_actual.toppings.length) {
                     toppingsElegidos.push(producto_actual.toppings[toppingIndex]);
-                } else { valid = false; break; }
+                } else {
+                    valid = false;
+                    break;
+                }
+            } else {
+                // Si la opción no empieza con 'S' o 'T', es inválida.
+                valid = false;
+                break;
             }
         }
     }
@@ -522,11 +474,12 @@ async function handleSelectDetails(sock, jid, input, userSession, ctx) {
     if (!valid) {
         userSession.errorCount++;
         await say(sock, jid, `❌ Opción no válida. Usa el formato correcto (ej: S1, T2) o escribe "sin" si no deseas adicionales.`, ctx);
-        return; // Detiene la ejecución si la validación falla.
+        return;
     }
+
     userSession.saboresSeleccionados = saboresElegidos;
     userSession.toppingsSeleccionados = toppingsElegidos;
-    
+
     await say(sock, jid, '🔢 ¿Cuántas unidades de este producto quieres?', ctx);
     userSession.phase = PHASE.SELECT_QUANTITY;
     userSession.errorCount = 0;
@@ -572,87 +525,9 @@ async function handleEncargo(sock, jid, input, userSession, ctx) {
     resetChat(jid, ctx);
 }
 
-// --- CONFIGURACIÓN DE SOCKET Y TAREAS DE MANTENIMIENTO (Sin cambios) ---
-function setupSocketHandlers(sock, ctx) {
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        for (const msg of messages) {
-            if (!msg.message) continue;
-             const messageTimestampInSeconds = msg.messageTimestamp;
-            const botStartTimeInMs = ctx.startTime;
-
-            if ((messageTimestampInSeconds * 1000) < botStartTimeInMs) {
-                logger.info(`[${msg.key.remoteJid}] -> Ignorando mensaje antiguo.`);
-                continue; 
-            }
-            const messageData = {
-                from: msg.key.remoteJid,
-                text: msg.message?.conversation || msg.message?.extendedTextMessage?.text || '',
-                key: msg.key
-            };
-            if (!messageData.text || !messageData.text.trim()) continue;
-            processIncomingMessage(sock, messageData, ctx).catch(error => {
-                logger.error('❌ Error crítico al procesar mensaje:', error);
-                logUserError(messageData.from, 'main_handler', messageData.text, error.stack);
-            });
-        }
-    });
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
-            if (shouldReconnect) logger.info('🔄 Intentando reconectar...');
-            else logger.error('🚫 Error de autenticación. Escanear QR nuevamente.');
-        } else if (connection === 'open') {
-            logger.info('✅ Conexión establecida.');
-        }
-    });
-
-    sock.ev.on('creds.update', () => logger.info('🔑 Credenciales actualizadas'));
-    logger.info('🎯 Event handlers configurados.');
-}
-
-function startMaintenanceTasks(ctx) {
-    const oneHour = 60 * 60 * 1000;
-    const maintenanceInterval = setInterval(() => {
-        const now = Date.now();
-        let cleanedSessions = 0;
-        for (const [jid, session] of Object.entries(ctx.sessions)) {
-            if (now - session.lastPromptAt > oneHour) {
-                delete ctx.sessions[jid];
-                cleanedSessions++;
-            }
-        }
-        if (cleanedSessions > 0) logger.info(`🧹 Limpieza automática: ${cleanedSessions} sesiones inactivas eliminadas`);
-    }, oneHour);
-    _backgroundIntervals.push(maintenanceInterval);
-    logger.info('⚙️ Tareas de mantenimiento iniciadas');
-}
-
-function stopBackgroundTasks() {
-    for (const id of _backgroundIntervals) {
-        try { clearInterval(id); } catch (e) { /* ignore */ }
-    }
-    _backgroundIntervals = [];
-    logger.info('🛑 Background intervals cleared');
-}
-
-function initializeBotContext() {
-    const ctx = {
-        sessions: {},
-        botEnabled: true,
-        startTime: Date.now(),
-        version: '2.0.1' // Versión actualizada con el fix
-    };
-    logger.info('✅ Contexto del bot inicializado.');
-    return ctx;
-}
-
-
 module.exports = {
-    setupSocketHandlers,
-    startMaintenanceTasks,
+    processIncomingMessage,
     initializeBotContext,
-    processIncomingMessage, // export para pruebas y uso externo
-    stopBackgroundTasks
+    setupSocketHandlers,
+    startMaintenanceTasks
 };
