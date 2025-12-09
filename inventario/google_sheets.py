@@ -1,8 +1,35 @@
+import os
+import tempfile
+import base64
+import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
-SERVICE_ACCOUNT_FILE = 'service_account.json'
+# Helper to resolve service account JSON path or decode base64 JSON from env
+def _get_service_account_file():
+    # 1) explicit path to credentials file
+    sa_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    if sa_path:
+        return sa_path
+
+    # 2) base64 encoded JSON or raw JSON in env var
+    sa_b64 = os.environ.get('GOOGLE_SERVICE_ACCOUNT_B64') or os.environ.get('GOOGLE_SERVICE_ACCOUNT')
+    if sa_b64:
+        try:
+            data = base64.b64decode(sa_b64)
+        except Exception:
+            # assume it's raw JSON string
+            data = sa_b64.encode('utf8')
+        tf = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
+        tf.write(data)
+        tf.flush()
+        return tf.name
+
+    # 3) fallback to repo-local filename (legacy)
+    return 'service_account.json'
+
+SERVICE_ACCOUNT_FILE = _get_service_account_file()
 ENTREGAS_SPREADSHEET_ID = '1479sKgwA2ES503noFusdM-rOYv412-ogcqEouI6zQgI'
 ENTREGAS_SHEET_NAME = 'Entregas'
 

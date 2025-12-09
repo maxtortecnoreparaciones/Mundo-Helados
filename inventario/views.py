@@ -8,10 +8,32 @@ from google.oauth2 import service_account
 from datetime import datetime
 import Levenshtein
 from .models import Producto
+import os
+import tempfile
+import base64
 
+# Resolve SERVICE_ACCOUNT_FILE: prefer env path, then base64 JSON, then default file
+def _get_service_account_file():
+    env_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    if env_path:
+        return env_path
+
+    sa_b64 = os.environ.get('GOOGLE_SERVICE_ACCOUNT_B64') or os.environ.get('GOOGLE_SERVICE_ACCOUNT')
+    if sa_b64:
+        try:
+            data = base64.b64decode(sa_b64)
+        except Exception:
+            data = sa_b64.encode('utf8')
+        tf = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
+        tf.write(data)
+        tf.flush()
+        return tf.name
+
+    # fallback to project-local file
+    return settings.BASE_DIR / 'service_account.json'
 
 # --- Configuración de la API de Google Sheets ---
-SERVICE_ACCOUNT_FILE = settings.BASE_DIR / 'service_account.json'
+SERVICE_ACCOUNT_FILE = _get_service_account_file()
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 creds = service_account.Credentials.from_service_account_file(
     SERVICE_ACCOUNT_FILE, scopes=SCOPES
