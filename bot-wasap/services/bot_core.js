@@ -8,8 +8,8 @@ const { logConversation } = require('../utils/logger');
 const { sleep, money } = require('../utils/util');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const CONFIG = require('../config.json');
-
-
+// Centralized secrets loader (loads .env in development)
+const SECRETS = require('../config.secrets');
 
 async function getSaboresYToppings(ctx) {
     try {
@@ -37,7 +37,8 @@ function resetChat(jid, ctx) {
         lastMatches: [],
         createdAt: Date.now(),
         adminNotified: false,
-        miaActivo: true
+        miaActivo: true,
+        awaitingField: null // <-- evitar re-preguntas dejando claro qué campo esperamos
     };
     console.log(`Sesión y carrito reseteados para ${jid}`);
 }
@@ -108,18 +109,16 @@ async function sendImage(sock, jid, imagePath, caption, ctx) {
 }
 
 async function askGemini(ctx, question) {
-    if (!ctx.gemini) {
-        console.error("Error: Cliente de Gemini no inicializado.");
-        return JSON.stringify({ "respuesta_texto": "Lo siento, mi conexión con la IA está fallando." });
+    // Resolve API key from centralized secrets, fallback to config.json
+    const key = SECRETS.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY;
+    if (!key) {
+        console.error('askGemini: Gemini API key missing (check .env or config).');
+        // Return a safe human-friendly JSON so the bot can continue without throwing
+        return JSON.stringify({ "respuesta_texto": "Lo siento, el servicio de IA no está disponible en este momento." });
     }
 
-    
-    const genAI = new GoogleGenerativeAI(CONFIG.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-flash" ,generationConfig: {
-            responseMimeType: "application/json"},
-        
-    });
-        
+    const genAI = new GoogleGenerativeAI(key);
+    const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
 
     const prompt = `
    Eres "MIA", el asistente experto de la heladería "Mundo Helados". Tu única tarea es analizar la petición de un cliente y devolver SIEMPRE un objeto JSON.
@@ -137,50 +136,50 @@ async function askGemini(ctx, question) {
         -   **Disponibilidad de productos:** "La mejor forma de saberlo es viendo el menú. Si un producto no aparece en la lista, no está disponible hoy. ¿Quieres que te lo muestre?"
         -   **Métodos de pago:** "Por el momento solo aceptamos pagos en Efectivo o por Transferencia (Nequi) 😊."
         -   **Tiempo del domicilio:** "El domicilio normalmente tarda entre 20 y 40 minutos."
-        -   **Charla casual (Gracias, Ok, Hola):** Responde amigablemente y sugiere ver el menú. Ejemplo: "¡Con gusto! 😊 ¿Te puedo ayudar con algo más o te gustaría ver el menú?".
-        ---
-
-        ## EJEMPLOS DE SALIDA:
-        - Petición: "quiero 2 copas brownie para laura en la calle 123"
-        - JSON: {"items": [{"producto": "Copa Brownie", "cantidad": 2, "modificaciones": []}], "nombre": "laura", "direccion": "calle 123"}
-        
-        - Petición: "me regalas la carta"
-        - JSON: {"accion": "mostrar_menu"}
-
-        - Petición: "donde quedan?"
-        - JSON: {"respuesta_texto": "¡Claro! Estamos en la Cra 7h n 34 b 08 y abrimos todos los días de 2:00 PM a 10:00 PM. ¡Te esperamos! 🍦"}
-        
-        - Petición: "gracias"
-        - JSON: {"respuesta_texto": "¡Con gusto! 😊 ¿Te puedo ayudar con algo más o te gustaría ver el menú?"}
+        -   **Charla casual (Gracias, Ok, Hola):** Responde amigablemente y sugiere ver el menú. Ejemplo: "¡Con gusto! 😊 ¿Te puedo ayudar con algo más o te gustaría ver el menú?"
         ---
         Petición del cliente: "${question}"
 
     `;
 
-    try {
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        let textResponse = response.text().trim();
+    // Resilient call with retries and timeout
+    const MAX_ATTEMPTS = 3;
+    const TIMEOUT_MS = 15000;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+            // model.generateContent may return an object; race with timeout
+            const generatePromise = model.generateContent(prompt);
+            const result = await Promise.race([
+                generatePromise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini request timeout')), TIMEOUT_MS))
+            ]);
 
-        if (textResponse.startsWith('```json')) {
-            textResponse = textResponse.substring(7, textResponse.length - 3).trim();
+            const response = await result.response;
+            let textResponse = response.text().trim();
+
+            if (textResponse.startsWith('```json')) {
+                textResponse = textResponse.substring(7, textResponse.length - 3).trim();
+            }
+
+            // Validate JSON
+            JSON.parse(textResponse);
+            return textResponse;
+        } catch (error) {
+            console.error(`askGemini attempt ${attempt} failed:`, error.message || error);
+            if (attempt < MAX_ATTEMPTS) {
+                // exponential backoff
+                const backoff = 500 * Math.pow(2, attempt);
+                await sleep(backoff);
+                continue;
+            }
+
+            // On final failure, return human-friendly JSON to the bot
+            console.error('askGemini: all attempts failed.');
+            return JSON.stringify({ "respuesta_texto": "¡Uy! No entiendo, por favor indícame tu solicitud con más detalle o escribe *menú* para ver opciones." });
         }
-        
-        JSON.parse(textResponse);
-        return textResponse;
-    } catch (error) {
-        console.error("Error al interactuar con la API de Gemini:", error.message);
-        // Devolvemos un JSON de error para no romper el flujo.
-        return JSON.stringify({ "respuesta_texto": "¡Uy! No entiendo indicame cual es tu solicitud mas exacta. 😅 Por favor, intenta de nuevo." });
     }
 }
 
-// =================================================================================
-// CAMBIO 2 (PRINCIPAL): FUNCIÓN `handleProductSelection` COMPLETAMENTE RECONSTRUIDA
-// Ahora esta función construye un mensaje completo que guía al usuario al siguiente
-// paso, preguntando por sabores y toppings si es necesario, o directamente por
-// la cantidad si el producto no tiene opciones. Esto desbloquea la conversación.
-// =================================================================================
 async function handleProductSelection(sock, jid, producto, ctx) {
     // 1. Guarda el producto actual en la sesión del usuario
     ctx.sessions[jid].currentProduct = producto;
@@ -188,31 +187,49 @@ async function handleProductSelection(sock, jid, producto, ctx) {
     // 2. Construye el mensaje de respuesta paso a paso
     let mensaje = `Has seleccionado: *${producto.NombreProducto}* — COP$${money(producto.Precio_Venta)}\n${producto.Descripcion || ''}`;
 
-    const numSabores = parseInt(producto.Numero_de_Sabores || 0);
-    const numToppings = parseInt(producto.Numero_de_Toppings || 0);
+    // Preferir sabores/toppings embebidos en el producto, si existen; si no, usar el cache global ctx.saboresYToppings
+    const productSabores = Array.isArray(producto.sabores) ? producto.sabores : [];
+    const productToppings = Array.isArray(producto.toppings) ? producto.toppings : [];
+
+    // Determinar número de sabores/toppings esperados
+    const numSabores = productSabores.length > 0 ? productSabores.length : parseInt(producto.Numero_de_Sabores || 0);
+    const numToppings = productToppings.length > 0 ? productToppings.length : parseInt(producto.Numero_de_Toppings || 0);
+
+    // Si el producto requiere sabores pero no tenemos la lista global, intentar cargarla
+    if ((numSabores > 0) && (!ctx.saboresYToppings || !Array.isArray(ctx.saboresYToppings.sabores))) {
+        try {
+            await getSaboresYToppings(ctx);
+        } catch (e) {
+            console.error('Error cargando sabores y toppings globales:', e.message);
+        }
+    }
+
+    // Build actual lists to show: prefer product-specific lists, else fallback to ctx.saboresYToppings
+    const saboresList = productSabores.length > 0 ? productSabores : (ctx.saboresYToppings && Array.isArray(ctx.saboresYToppings.sabores) ? ctx.saboresYToppings.sabores : []);
+    const toppingsList = productToppings.length > 0 ? productToppings : (ctx.saboresYToppings && Array.isArray(ctx.saboresYToppings.toppings) ? ctx.saboresYToppings.toppings : []);
 
     // 3. Añade la sección de SABORES si el producto los requiere
-    if (numSabores > 0 && ctx.saboresYToppings && ctx.saboresYToppings.sabores) {
+    if (numSabores > 0 && saboresList.length > 0) {
         mensaje += `\n\n*Elige ${numSabores} sabor${numSabores > 1 ? 'es' : ''} de la lista (ej: S1, S3):*\n`;
-        mensaje += ctx.saboresYToppings.sabores.map((s, i) => `*S${i + 1})* ${s.NombreProducto}`).join('\n');
+        mensaje += saboresList.map((s, i) => `*S${i + 1})* ${s.NombreProducto || s}`).join('\n');
     }
 
     // 4. Añade la sección de TOPPINGS si el producto los requiere
-    if (numToppings > 0 && ctx.saboresYToppings && ctx.saboresYToppings.toppings) {
+    if (numToppings > 0 && toppingsList.length > 0) {
         mensaje += `\n\n*Elige hasta ${numToppings} topping${numToppings > 1 ? 's' : ''} (ej: T1, T2):*\n`;
-        mensaje += ctx.saboresYToppings.toppings.map((t, i) => `*T${i + 1})* ${t.NombreProducto}`).join('\n');
+        mensaje += toppingsList.map((t, i) => `*T${i + 1})* ${t.NombreProducto || t}`).join('\n');
     }
 
     // 5. Añade las instrucciones finales
-    if (numSabores > 0 || numToppings > 0) {
+    if ((numSabores > 0 && saboresList.length > 0) || (numToppings > 0 && toppingsList.length > 0)) {
         mensaje += `\n\n_Para elegir, escribe los códigos separados por comas o espacio (ej: S1, T2). Si no deseas ninguno, escribe **sin nada**._`;
-        // La fase la controla el handler.js, que la pondrá en 'select_details'
+        // Indicamos que ahora esperamos los detalles (sabores/toppings)
+        if (ctx.sessions[jid]) ctx.sessions[jid].awaitingField = 'details';
     } else {
         // Si el producto no tiene opciones, preguntamos directamente la cantidad
         mensaje += `\n\n🔢 ¿Cuántas unidades de este producto quieres?`;
-        // El handler.js cambiará la fase a 'select_details'. La lógica en esa fase
-        // deberá ser lo suficientemente inteligente para saltar a 'select_quantity'.
-        // O mejor aún, el handler puede manejar esto. Por ahora, esto desbloquea la conversación.
+        // Indicamos que ahora esperamos la cantidad
+        if (ctx.sessions[jid]) ctx.sessions[jid].awaitingField = 'quantity';
     }
 
     // 6. Envía el mensaje completo al usuario

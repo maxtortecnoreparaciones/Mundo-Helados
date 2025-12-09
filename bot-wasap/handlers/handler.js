@@ -32,7 +32,17 @@ const {
 } = require('../utils/logger');
 const PHASE = require('../utils/phases');
 const CONFIG = require('../config.json');
+const SECRETS = require('../config.secrets');
 const ENDPOINTS = CONFIG.ENDPOINTS;
+
+// Helper: unified admin JIDs resolver (fallback to individual ADMIN_JID / SOCIA_JID)
+function getAdminJids() {
+    if (Array.isArray(CONFIG.ADMIN_JIDS) && CONFIG.ADMIN_JIDS.length > 0) return CONFIG.ADMIN_JIDS;
+    const list = [];
+    if (CONFIG.ADMIN_JID) list.push(CONFIG.ADMIN_JID);
+    if (CONFIG.SOCIA_JID) list.push(CONFIG.SOCIA_JID);
+    return list;
+}
 
 // --- FUNCIONES AUXILIARES (Sin cambios) ---
 function normalizeText(text) {
@@ -88,6 +98,10 @@ function initializeUserSession(jid, ctx) {
     if (!ctx.sessions[jid].order) {
         ctx.sessions[jid].order = { items: [] };
     }
+    // Campo que indica qué dato se está esperando del usuario (ej: 'quantity', 'address')
+    if (typeof ctx.sessions[jid].awaitingField === 'undefined') {
+        ctx.sessions[jid].awaitingField = null;
+    }
     if (!ctx.sessions[jid].miaActivo) {
     ctx.sessions[jid].miaActivo = true;   // Por defecto activa
 }
@@ -103,18 +117,82 @@ if (!ctx.sessions[jid].erroresMIA) {
 // RUTA: bot-wasap/handlers/handler.js
 
 // RUTA: handlers/handler.js
+
+// Helper: notify admins and mute chat on repeated MIA failures
+async function notifyAndMuteOnMIAFailure(sock, jid, userSession, ctx, reason) {
+    try {
+        userSession.adminNotified = true;
+        userSession.miaActivo = false;
+        if (!ctx.mutedChats) ctx.mutedChats = new Set();
+        ctx.mutedChats.add(jid);
+
+        const admins = getAdminJids();
+        const chatLink = `https://wa.me/${jid.split('@')[0]}`;
+        const adminMsg = `🔔 ¡ATENCIÓN! 🔔\n\nEl cliente ${jid.split('@')[0]} necesita ayuda.\nMotivo: ${reason || 'fallos en MIA'}\nAbrir chat: ${chatLink}`;
+        for (const admin of admins) {
+            if (!admin) continue;
+            try { await say(sock, admin, adminMsg, ctx); } catch (e) { logger.error(`Error notificando admin ${admin}: ${e.message}`); }
+        }
+
+        try {
+            await say(sock, jid, 'Lo siento, estamos teniendo problemas con el servicio de IA. Un agente humano ha sido notificado y te ayudará en breve. Si quieres que MIA vuelva, pide a un administrador que escriba "mia activa".', ctx);
+        } catch (e) { logger.error(`Error notificando usuario ${jid} tras falla MIA: ${e.message}`); }
+    } catch (e) {
+        logger.error(`notifyAndMuteOnMIAFailure error: ${e.message}`);
+    }
+}
+
 async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
     logger.info(`[${jid}] -> Procesando con MIA: "${text}"`);
-    const jsonResponse = await askGemini(ctx, text);
+    let jsonResponse = null;
+
+    try {
+        // Protegemos la llamada a Gemini para que cualquier excepción sea capturada aquí
+        jsonResponse = await askGemini(ctx, text);
+    } catch (err) {
+        // Logueo detallado y manejo de contador de errores de MIA
+        logger.error(`Error al interactuar con la API de Gemini: ${err.message}`, err.stack || err);
+        userSession.erroresMIA = (userSession.erroresMIA || 0) + 1;
+
+        // Si la IA falla repetidamente, notificar admins y silenciar chat
+        if (userSession.erroresMIA >= 2) {
+            try {
+                if (!ctx.mutedChats) ctx.mutedChats = new Set();
+                ctx.mutedChats.add(jid);
+            } catch (e) {
+                logger.error(`Error al actualizar ctx.mutedChats: ${e.message}`);
+            }
+
+            // Desactivar MIA para este usuario hasta que un admin reactive
+            userSession.miaActivo = false;
+            userSession.adminNotified = true;
+
+            const notification = `🔔 ¡ATENCIÓN! 🔔\n\nEl cliente ${jid.split('@')[0]} necesita ayuda: MIA produjo errores repetidos.\n\nÚltimo error: ${err.message}\n\nPor favor revisa la integración con Gemini y el estado de las claves/API.`;
+            const ADMINS_TO_NOTIFY = getAdminJids();
+            for (const adminJid of ADMINS_TO_NOTIFY) {
+                if (adminJid) {
+                    try { await say(sock, adminJid, notification, ctx); } catch (notifyErr) { logger.error(`Error notificando admin ${adminJid}: ${notifyErr.message}`); }
+                }
+            }
+
+            await say(sock, jid, 'Lo siento, no logro entender. Un agente humano ha sido notificado y te ayudará en breve. Si quieres que MIA vuelva, pide a un administrador que escriba "mia activa".', ctx);
+        } else {
+            await say(sock, jid, 'No te entendí muy bien, ¿podrías decirlo de otra forma?', ctx);
+        }
+        return;
+    }
 
     if (!jsonResponse) {
+        // Manejo cuando askGemini regresa vacío/null (similar al anterior pero sin excepción)
         userSession.erroresMIA = (userSession.erroresMIA || 0) + 1;
         if (userSession.erroresMIA >= 2) {
-            ctx.mutedChats.add(jid);
-            const notification = `🔔 ¡ATENCIÓN! 🔔\n\nEl cliente ${jid.split('@')[0]} necesita ayuda. MIA no entendió su petición dos veces.\nEl bot ha sido silenciado para este chat.\n\nPara reactivar, escribe: *mia activa*`;
-            const ADMINS_TO_NOTIFY = [CONFIG.ADMIN_JID, CONFIG.SOCIA_JID].filter(Boolean);
+            try { if (!ctx.mutedChats) ctx.mutedChats = new Set(); ctx.mutedChats.add(jid); } catch (e) { logger.error(`Error al actualizar ctx.mutedChats: ${e.message}`); }
+            const notification = `🔔 ¡ATENCIÓN! 🔔\n\nEl cliente ${jid.split('@')[0]} necesita ayuda: MIA devolvió respuesta vacía.`;
+            const ADMINS_TO_NOTIFY = getAdminJids();
             for (const adminJid of ADMINS_TO_NOTIFY) {
-                if (adminJid) await say(sock, adminJid, notification, ctx);
+                if (adminJid) {
+                    try { await say(sock, adminJid, notification, ctx); } catch (notifyErr) { logger.error(`Error notificando admin ${adminJid}: ${notifyErr.message}`); }
+                }
             }
             await say(sock, jid, 'Lo siento, no logro entender. Un agente humano ha sido notificado y te ayudará en breve.', ctx);
         } else {
@@ -156,6 +234,12 @@ async function handleNaturalLanguageOrder(sock, jid, text, userSession, ctx) {
         }
     } catch (e) {
         logger.error(`[${jid}] -> Error al procesar JSON de Gemini: ${e.message}`);
+        // Notificar admins sobre el parseo fallido (posible cambio en el formato de la IA)
+        const admins = getAdminJids();
+        const adminMsg = `🔴 Error procesando respuesta de MIA para ${jid.split('@')[0]}:\n- Error: ${e.message}\n- Respuesta cruda: ${String(jsonResponse).substring(0,1000)}`;
+        for (const admin of admins) {
+            try { if (admin) await say(sock, admin, adminMsg, ctx); } catch (notifyErr) { logger.error(`Error notificando admin ${admin}: ${notifyErr.message}`); }
+        }
     }
 }
 
@@ -174,12 +258,29 @@ async function processIncomingMessage(sock, msg, ctx) {
 
         const userSession = initializeUserSession(jid, ctx);
         userSession.lastPromptAt = Date.now();
+        // Guard: ignorar mensajes idénticos enviados en un corto intervalo (6s)
+        const now = Date.now();
+        const importantInputRegex = /^\s*(s\d+|t\d+|\d+|sin)\b/i;
+        const looksLikeImportant = importantInputRegex.test(text.trim());
+        if (userSession.lastMessage && userSession.lastMessage.text === text && (now - userSession.lastMessage.at) < 6000) {
+            // If this looks like a selection/quantity and the user is in a relevant phase, allow it through
+            const allowIfExpectedPhase = [PHASE.SELECT_DETAILS, PHASE.SELECT_QUANTITY, PHASE.SELECCION_PRODUCTO];
+            if (looksLikeImportant && allowIfExpectedPhase.includes(userSession.phase)) {
+                logger.info(`[${jid}] -> Duplicate-like input looks important and user is in phase=${userSession.phase}. Allowing processing.`);
+            } else {
+                // Detailed debug to help diagnose duplicate sends
+                logger.warn(`[${jid}] -> Ignorado mensaje duplicado en ${now - userSession.lastMessage.at}ms. awaitingField=${userSession.awaitingField} processingQuantity=${userSession.processingQuantity} lastAdded=${JSON.stringify(userSession.lastAdded)} lastQuantityReceived=${JSON.stringify(userSession.lastQuantityReceived)}`);
+                logger.info(`[${jid}] -> Ignorando mensaje duplicado recibido: "${text}"`);
+                return;
+            }
+        }
+        userSession.lastMessage = { text, at: now };
         logger.info(`[${jid}] -> Fase actual: ${userSession.phase}. Mensaje recibido: "${text}"`);
 
         // Si el usuario ha tenido 2 o más errores consecutivos, notificar a los administradores
         if (userSession.errorCount >= 2 && !userSession.adminNotified) {
             userSession.adminNotified = true;
-            const admins = CONFIG.ADMIN_JIDS || [];
+            const admins = getAdminJids();
             const chatLink = `https://wa.me/${jid.split('@')[0]}`;
             const adminMsg = `🔔 Atención: Cliente con dificultades.\n\nCliente: ${jid.split('@')[0]}\nÚltimo mensaje: "${text}"\nAbrir chat: ${chatLink}\n\nPor favor, toma el control de este chat.`;
 
@@ -195,6 +296,8 @@ async function processIncomingMessage(sock, msg, ctx) {
             try {
                 if (!ctx.mutedChats) ctx.mutedChats = new Set();
                 ctx.mutedChats.add(jid);
+                // Also disable MIA for this session until an admin reactivates
+                userSession.miaActivo = false;
             } catch (e) {
                 logger.error(`Error al añadir chat a mutedChats: ${e.message}`);
             }
@@ -205,6 +308,13 @@ async function processIncomingMessage(sock, msg, ctx) {
             } catch (e) {
                 logger.error(`Error enviando notificación al usuario ${jid}: ${e.message}`);
             }
+        }
+
+        // Si el chat está silenciado, no procesar mensajes (pero registrar que el admin puede reactivar)
+        if (ctx.mutedChats && ctx.mutedChats.has(jid)) {
+            const adminSession = initializeUserSession(CONFIG.ADMIN_JID || (getAdminJids()[0] || ''), ctx);
+            adminSession.lastCustomerJid = jid;
+            return;
         }
 
         if (jid === CONFIG.ADMIN_JID || jid === CONFIG.SOCIA_JID) {
@@ -291,7 +401,57 @@ if (t === "mia activa") {
                     await handleSeleccionOpcion(sock, jid, option, userSession, ctx);
                 } else {
                      if (userSession.miaActivo) {
+            // PROACTIVE GUARD: si ya hubo fallos de MIA previos, no volver a invocar la IA
+            // y notificar/admin-silenciar si no se hizo correctamente antes.
+            if ((userSession.erroresMIA || 0) >= 1 && !userSession.adminNotified) {
+                try {
+                    userSession.adminNotified = true;
+                    userSession.miaActivo = false;
+                    if (!ctx.mutedChats) ctx.mutedChats = new Set();
+                    ctx.mutedChats.add(jid);
+
+                    const admins = getAdminJids();
+                    const chatLink = `https://wa.me/${jid.split('@')[0]}`;
+                    const notifyText = `🔔 ¡ATENCIÓN! 🔔\n\nCliente: ${jid.split('@')[0]}\nMotivo: MIA ha fallado previamente (${userSession.erroresMIA} intentos).\nAbrir chat: ${chatLink}`;
+
+                    for (const admin of admins) {
+                        if (admin) {
+                            try { await say(sock, admin, notifyText, ctx); } catch (err) { logger.error(`Error notificando admin ${admin}: ${err.message}`); }
+                        }
+                    }
+
+                    await say(sock, jid, 'Lo siento, estamos teniendo problemas con el servicio de IA. Un agente humano ha sido notificado y te ayudará en breve. Si quieres que MIA vuelva, pide a un administrador que escriba "mia activa".', ctx);
+                } catch (e) {
+                    logger.error(`Error en guard proactivo de MIA: ${e.message}`);
+                }
+                return;
+            }
+
+            // If Gemini API key is not configured, avoid calling the IA repeatedly.
+            const geminiKey = SECRETS.GEMINI_API_KEY || process.env.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY;
+            if (!geminiKey) {
+                userSession.erroresMIA = (userSession.erroresMIA || 0) + 1;
+                logger.warn(`[${jid}] -> Gemini API key missing. Incremented erroresMIA=${userSession.erroresMIA}`);
+                if (userSession.erroresMIA >= 2 && !userSession.adminNotified) {
+                    await notifyAndMuteOnMIAFailure(sock, jid, userSession, ctx, 'Gemini API key missing or disabled');
+                } else {
+                    await say(sock, jid, 'Lo siento, el servicio de IA no está disponible temporalmente. Un agente humano ha sido notificado si es necesario.', ctx);
+                }
+                return;
+            }
+
             await handleNaturalLanguageOrder(sock, jid, text, userSession, ctx);
+
+            // POST-CHECK: si la llamada a MIA dejó errores acumulados pero no se ejecutó el mute/notify,
+            // forzamos la notificación/mute aquí para garantizar la protección.
+            try {
+                if ((userSession.erroresMIA || 0) >= 2 && !userSession.adminNotified) {
+                    await notifyAndMuteOnMIAFailure(sock, jid, userSession, ctx, `MIA devolvió errores (${userSession.erroresMIA})`);
+                    return;
+                }
+            } catch (e) {
+                logger.error(`Error en post-check MIA: ${e.message}`);
+            }
         } else {
             await say(sock, jid, "🤖 MIA está desactivada. Escribe *mia activa* si quieres que la IA continúe.", ctx);
         }
@@ -357,8 +517,9 @@ if (t === "mia activa") {
         logUserError(msg.from, 'main_handler', msg.text, error.stack);
 
         const errorMessageForAdmin = `🔴 *¡Error Crítico en el Bot!* 🔴\n\n- *Cliente:* ${msg.from}\n- *Mensaje:* "${msg.text}"\n- *Error:* ${error.message}\n\nPor favor, revisa la consola o los logs para más detalles.`;
-        if (CONFIG.ADMIN_JIDS && CONFIG.ADMIN_JIDS.length > 0) {
-            for (const adminJid of CONFIG.ADMIN_JIDS) {
+        const admins = getAdminJids();
+        if (admins && admins.length > 0) {
+            for (const adminJid of admins) {
                 try {
                     await say(sock, adminJid, errorMessageForAdmin, ctx);
                 } catch (notifyError) {
@@ -451,6 +612,14 @@ async function handleBrowseImages(sock, jid, text, userSession, ctx) {
             userSession.phase = PHASE.SELECT_DETAILS;
             userSession.currentProduct = productos[0];
             userSession.errorCount = 0;
+            // Ensure awaitingField is correct based on product requirements
+            const numSabores = parseInt(productos[0].Numero_de_Sabores || 0);
+            const numToppings = parseInt(productos[0].Numero_de_Toppings || 0);
+            if (numSabores > 0 || numToppings > 0) {
+                userSession.awaitingField = 'details';
+            } else {
+                userSession.awaitingField = 'quantity';
+            }
         } else if (productos.length > 1) {
             userSession.phase = PHASE.SELECCION_PRODUCTO;
             userSession.lastMatches = productos;
@@ -482,10 +651,37 @@ async function handleSeleccionProducto(sock, jid, input, userSession, ctx) {
     userSession.phase = PHASE.SELECT_DETAILS;
     userSession.currentProduct = producto;
     userSession.errorCount = 0;
+    // Ensure awaitingField is correct after selection
+    const numSaboresSel = parseInt(producto.Numero_de_Sabores || 0);
+    const numToppingsSel = parseInt(producto.Numero_de_Toppings || 0);
+    if (numSaboresSel > 0 || numToppingsSel > 0) {
+        userSession.awaitingField = 'details';
+    } else {
+        userSession.awaitingField = 'quantity';
+    }
 }
 
 async function handleSelectDetails(sock, jid, input, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSelectDetails. Input: "${input}"`);
+
+    // Determine if input looks like a details selection (S1, T2, or simple numeric choice)
+    const looksLikeDetail = /^\s*(s\d+|t\d+|\d+|sin)\b/i.test(input.trim());
+
+    // Evitar re-preguntas solo si el input no parece ser una selección de detalles
+    if (userSession.awaitingField && userSession.awaitingField !== 'details' && !looksLikeDetail && userSession.phase !== PHASE.SELECT_DETAILS) {
+        logger.info(`[${jid}] -> Ignorando entrada en detalles porque awaitingField=${userSession.awaitingField}`);
+        return;
+    }
+
+    if (userSession.awaitingField && userSession.awaitingField !== 'details' && userSession.phase === PHASE.SELECT_DETAILS && !looksLikeDetail) {
+        logger.warn(`[${jid}] -> Mismatch detected: phase=SELECT_DETAILS but awaitingField=${userSession.awaitingField} and input does not look like details. Ignoring.`);
+        return;
+    }
+
+    if (userSession.awaitingField && userSession.awaitingField !== 'details' && userSession.phase === PHASE.SELECT_DETAILS && looksLikeDetail) {
+        logger.warn(`[${jid}] -> Mismatch detected but input looks like details. Proceeding to handle details despite awaitingField=${userSession.awaitingField}`);
+    }
+
     const producto_actual = userSession.currentProduct;
     if (!producto_actual) {
         await say(sock, jid, '⚠️ Error: No hay producto seleccionado. Volviendo al menú.', ctx);
@@ -493,7 +689,7 @@ async function handleSelectDetails(sock, jid, input, userSession, ctx) {
         return;
     }
 
-    const selectedOptions = input.split(/[\s,]+/).filter(Boolean);
+    const selectedOptions = input.split(/[,\s]+/).filter(Boolean);
     let valid = true;
     const saboresElegidos = [];
     const toppingsElegidos = [];
@@ -505,6 +701,20 @@ async function handleSelectDetails(sock, jid, input, userSession, ctx) {
     } else {
         for (const option of selectedOptions) {
             const upperOption = option.toUpperCase();
+            // Support plain numeric selection (e.g. '1' selects first flavor)
+            if (/^\d+$/.test(option)) {
+                const idx = parseInt(option, 10) - 1;
+                if (producto_actual.sabores && idx >= 0 && idx < producto_actual.sabores.length) {
+                    saboresElegidos.push(producto_actual.sabores[idx]);
+                    continue;
+                }
+                // If not a sabor, check toppings list as fallback
+                if (producto_actual.toppings && idx >= 0 && idx < producto_actual.toppings.length) {
+                    toppingsElegidos.push(producto_actual.toppings[idx]);
+                    continue;
+                }
+                valid = false; break;
+            }
             if (upperOption.startsWith('S') && producto_actual.sabores) {
                 const flavorIndex = parseInt(upperOption.substring(1)) - 1;
                 if (flavorIndex >= 0 && flavorIndex < producto_actual.sabores.length) {
@@ -515,6 +725,9 @@ async function handleSelectDetails(sock, jid, input, userSession, ctx) {
                 if (toppingIndex >= 0 && toppingIndex < producto_actual.toppings.length) {
                     toppingsElegidos.push(producto_actual.toppings[toppingIndex]);
                 } else { valid = false; break; }
+            } else {
+                // Unrecognized token
+                valid = false; break;
             }
         }
     }
@@ -524,16 +737,42 @@ async function handleSelectDetails(sock, jid, input, userSession, ctx) {
         await say(sock, jid, `❌ Opción no válida. Usa el formato correcto (ej: S1, T2) o escribe "sin" si no deseas adicionales.`, ctx);
         return; // Detiene la ejecución si la validación falla.
     }
+
     userSession.saboresSeleccionados = saboresElegidos;
     userSession.toppingsSeleccionados = toppingsElegidos;
-    
-    await say(sock, jid, '🔢 ¿Cuántas unidades de este producto quieres?', ctx);
+    userSession.errorCount = 0;
+
+    // Limpiamos awaitingField y avanzamos a preguntar la cantidad
+    // Marca que ahora esperamos la cantidad para evitar re-preguntas o inputs fuera de orden
+    userSession.awaitingField = 'quantity';
     userSession.phase = PHASE.SELECT_QUANTITY;
     userSession.errorCount = 0;
+    userSession.quantityPromptAt = Date.now(); // <-- timestamp to detect rapid replies
+    await say(sock, jid, '🔢 ¿Cuántas unidades de este producto quieres?', ctx);
 }
 
 async function handleSelectQuantity(sock, jid, cleanedText, userSession, ctx) {
     logger.info(`[${jid}] -> Entrando a handleSelectQuantity. Cantidad: "${cleanedText}"`);
+
+    // Evitar re-preguntar si no estamos esperando cantidad
+    if (userSession.awaitingField && userSession.awaitingField !== 'quantity') {
+        logger.info(`[${jid}] -> Ignorando cantidad porque awaitingField=${userSession.awaitingField}`);
+        return;
+    }
+
+    // Si ya estamos procesando una cantidad para esta sesión, ignorar mensajes simultáneos
+    if (userSession.processingQuantity) {
+        logger.warn(`[${jid}] -> Ignorando cantidad porque processingQuantity=true. awaitingField=${userSession.awaitingField} lastAdded=${JSON.stringify(userSession.lastAdded)} lastQuantityReceived=${JSON.stringify(userSession.lastQuantityReceived)}`);
+        return;
+    }
+
+    // Dedupe: if already received same quantity recently, ignore
+    const now = Date.now();
+    if (!isNaN(parseInt(cleanedText)) && userSession.lastQuantityReceived && userSession.lastQuantityReceived.value === parseInt(cleanedText) && (now - userSession.lastQuantityReceived.at < 6000)) {
+        logger.warn(`[${jid}] -> Ignorando cantidad repetida reciente: ${cleanedText}. lastQuantityReceived=${JSON.stringify(userSession.lastQuantityReceived)} awaitingField=${userSession.awaitingField}`);
+        return;
+    }
+
     if (!userSession.currentProduct) {
         logger.error(`[${jid}] -> Error: userSession.currentProduct es nulo. Reiniciando chat.`);
         await say(sock, jid, '⚠️ Ocurrió un error. No se encontró el producto que intentabas agregar. Por favor, intenta seleccionarlo de nuevo desde el menú principal.', ctx);
@@ -548,19 +787,46 @@ async function handleSelectQuantity(sock, jid, cleanedText, userSession, ctx) {
     }
 
     const quantity = parseInt(cleanedText);
-    addToCart(ctx, jid, {
-        codigo: userSession.currentProduct.CodigoProducto,
-        nombre: userSession.currentProduct.NombreProducto,
-        precio: userSession.currentProduct.Precio_Venta,
-        sabores: userSession.saboresSeleccionados,
-        toppings: userSession.toppingsSeleccionados,
-    }, quantity);
 
-    const totalPrice = userSession.currentProduct.Precio_Venta * quantity;
-    await say(sock, jid, `✅ ¡Agregado! *${quantity}x* ${userSession.currentProduct.NombreProducto} - *COP$ ${money(totalPrice)}*`, ctx);
+    // Dedupe: si ya añadimos el mismo producto y cantidad en los últimos 5s, ignorar mensaje repetido
+    if (userSession.lastAdded && userSession.lastAdded.codigo === userSession.currentProduct.CodigoProducto && userSession.lastAdded.cantidad === quantity && (now - userSession.lastAdded.at < 5000)) {
+        logger.warn(`[${jid}] -> Ignorando cantidad duplicada para producto ${userSession.currentProduct.CodigoProducto}. lastAdded=${JSON.stringify(userSession.lastAdded)} awaitingField=${userSession.awaitingField} lastMessage=${JSON.stringify(userSession.lastMessage)}`);
+        return;
+    }
 
-    userSession.phase = PHASE.BROWSE_IMAGES;
-    await say(sock, jid, `¿Qué deseas hacer ahora?\n\n*1)* 🛒 Pagar mi pedido\n*2)* 🍨 Seguir comprando\n*3)* 📋 Volver al menú principal`, ctx);
+    // Marca que estamos procesando para evitar race conditions
+    userSession.processingQuantity = true;
+
+    try {
+        // Limpiamos la bandera awaitingField al recibir la cantidad válida
+        userSession.awaitingField = null;
+
+        addToCart(ctx, jid, {
+            codigo: userSession.currentProduct.CodigoProducto,
+            nombre: userSession.currentProduct.NombreProducto,
+            precio: userSession.currentProduct.Precio_Venta,
+            sabores: userSession.saboresSeleccionados,
+            toppings: userSession.toppingsSeleccionados,
+        }, quantity);
+
+        // Guardar registro de la última adición para evitar duplicados por reenvíos
+        userSession.lastAdded = { codigo: userSession.currentProduct.CodigoProducto, cantidad: quantity, at: Date.now() };
+
+        // After successfully adding to cart, record lastQuantityReceived
+        userSession.lastQuantityReceived = { value: quantity, at: Date.now() };
+
+        const totalPrice = userSession.currentProduct.Precio_Venta * quantity;
+        await say(sock, jid, `✅ ¡Agregado! *${quantity}x* ${userSession.currentProduct.NombreProducto} - *COP$ ${money(totalPrice)}*`, ctx);
+
+        // Después de agregar, limpiamos currentProduct para evitar que reenvíos vuelvan a añadir el mismo item
+        userSession.currentProduct = null;
+
+        userSession.phase = PHASE.BROWSE_IMAGES;
+        await say(sock, jid, `¿Qué deseas hacer ahora?\n\n*1)* 🛒 Pagar mi pedido\n*2)* 🍨 Seguir comprando\n*3)* 📋 Volver al menú principal`, ctx);
+    } finally {
+        // Limpiar flag de procesamiento pase lo que pase
+        userSession.processingQuantity = false;
+    }
 }
 
 async function handleEncargo(sock, jid, input, userSession, ctx) {
@@ -642,7 +908,8 @@ function initializeBotContext() {
         sessions: {},
         botEnabled: true,
         startTime: Date.now(),
-        version: '2.0.1' // Versión actualizada con el fix
+        version: '2.0.1', // Versión actualizada con el fix
+        mutedChats: new Set() // <-- asegurar que exista para evitar errores al consultar
     };
     logger.info('✅ Contexto del bot inicializado.');
     return ctx;

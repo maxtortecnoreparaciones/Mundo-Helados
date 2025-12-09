@@ -20,8 +20,20 @@ db.sqlite3
 # Archivos de Sesión de Baileys
 /auth_info_baileys.json
 /creds.json
+bot-wasap/auth_info_baileys/
 
 # Archivos del Sistema Operativo
 .DS_Store
 Thumbs.db
+
+# Sensitive keys and service account files
 service_account.json
+bot-wasap/service_account.json
+replace-secrets.txt
+bot-wasap/.env
+bot-wasap/.env.local
+
+# Logs and local artifacts
+logs/
+bot-wasap/conversations.log
+user_errors.log

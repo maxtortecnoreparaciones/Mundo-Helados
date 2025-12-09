@@ -4,9 +4,11 @@
 # Archivos de Sesión de Baileys (MUY IMPORTANTE)
 /auth_info_baileys.json
 **/auth_info_baileys.json
+*/auth_info_baileys/
 
 # Variables de Entorno (NUNCA SUBAS TUS SECRETOS)
 .env
+.env.local
 
 # Logs y Archivos de Depuración
 *.log
@@ -17,3 +19,9 @@ yarn-error.log*
 # Archivos del Sistema Operativo
 .DS_Store
 Thumbs.db
+
+# Archivos Sensibles
+service_account.json
+config.secrets.js
+*.pem
+*.key
