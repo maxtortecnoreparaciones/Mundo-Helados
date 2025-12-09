@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ feature/**, main, master ]
+
+jobs:
+  test-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install root dependencies
+        run: |
+          if [ -f package-lock.json ] ; then npm ci ; else npm install ; fi
+
+      - name: Run root tests
+        run: npm test || true
+
+      - name: Install bot-wasap deps and run tests
+        run: |
+          cd bot-wasap
+          if [ -f package-lock.json ] ; then npm ci ; else npm install ; fi
+          npm test || true
+
+      - name: Run gitleaks
+        uses: zricethezav/gitleaks-action@v2
+        with:
+          args: detect --source . --exit-code 1
+
+  # Early exit to avoid merging secrets

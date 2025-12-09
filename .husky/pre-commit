@@ -1,0 +1,6 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# Run gitleaks and tests before commit
+npx --no-install gitleaks@latest detect --source . --verbose || exit 1
+npm test || exit 1

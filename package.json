@@ -1,4 +1,10 @@
 {
+  "scripts": {
+    "prepare": "husky install"
+  },
+  "devDependencies": {
+    "husky": "^8.0.0"
+  },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.5.0",
     "axios": "^1.11.0",

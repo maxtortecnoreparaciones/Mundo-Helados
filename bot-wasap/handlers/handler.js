@@ -428,7 +428,7 @@ if (t === "mia activa") {
             }
 
             // If Gemini API key is not configured, avoid calling the IA repeatedly.
-            const geminiKey = SECRETS.GEMINI_API_KEY || process.env.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY;
+            const geminiKey = SECRETS.GEMINI_API_KEY || process.env.GEMINI_API_KEY; // prefer centralized loader
             if (!geminiKey) {
                 userSession.erroresMIA = (userSession.erroresMIA || 0) + 1;
                 logger.warn(`[${jid}] -> Gemini API key missing. Incremented erroresMIA=${userSession.erroresMIA}`);

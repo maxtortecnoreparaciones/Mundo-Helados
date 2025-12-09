@@ -2,9 +2,8 @@
 /node_modules
 
 # Archivos de Sesión de Baileys (MUY IMPORTANTE)
-/auth_info_baileys.json
-**/auth_info_baileys.json
-*/auth_info_baileys/
+/auth_info_baileys/
+auth_info_baileys/
 
 # Variables de Entorno (NUNCA SUBAS TUS SECRETOS)
 .env
@@ -25,3 +24,6 @@ service_account.json
 config.secrets.js
 *.pem
 *.key
+
+# Otros
+node_modules/

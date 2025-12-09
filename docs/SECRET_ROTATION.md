@@ -52,6 +52,56 @@ Pasos detallados
 7) Validación final
 - Después de rotar y limpiar el repo, ejecutar nuevamente el escaneo y confirmar que no aparecen claves en el repositorio ni en el historial.
 
+# SECRET_ROTATION.md
+
+Guía rápida para rotar y revocar secretos si se exponen en el repositorio.
+
+1) Rotar / Revocar inmediatamente
+- Si encontraste credenciales (API keys, service_account.json, tokens) en el repo o historial, revócalas y crea nuevas.
+- Para Google service accounts: elimina la clave expuesta en Google Cloud Console y genera una nueva. Actualiza los despliegues con la nueva clave.
+- Para Gemini / OpenAI keys: revoca la clave en la consola del proveedor y crea una nueva.
+
+2) Actualizar entornos
+- Actualiza variables en entornos locales (.env), servidores y CI (GitHub Secrets, Azure Key Vault, etc.).
+- Nunca subas .env ni archivos de credenciales al repositorio.
+
+3) Scanner de secretos
+- Ejecuta gitleaks o detect-secrets para verificar commits históricos y el estado actual.
+  Ejemplo (local):
+    npx gitleaks detect --source . --verbose
+  o con Docker:
+    docker run --rm -v "$(pwd):/repo" zricethezav/gitleaks:latest detect --source=/repo --verbose
+
+4) Reescribir historial (si procede)
+- Si las credenciales se comprometieron en commits pasados y el repositorio se ha compartido públicamente, considera reescribir el historial.
+- Herramientas recomendadas: git-filter-repo (recomendado), BFG Repo-Cleaner.
+
+  git-filter-repo ejemplo para eliminar archivo:
+    git filter-repo --path service_account.json --invert-paths
+
+  BFG ejemplo para eliminar tokens:
+    bfg --delete-files service_account.json
+
+- Advertencia: reescribir historial cambia SHA y requiere forzar push y coordinación con el equipo (todos deberán volver a clonar o resetear sus ramas).
+
+5) Prevención
+- Añade hook pre-commit (husky) que ejecute gitleaks o detect-secrets localmente.
+- Añade job en CI que falle el build si se detectan secretos (ya incluimos gitleaks en .github/workflows/ci.yml).
+
+6) Comunicación
+- Si las credenciales se filtraron públicamente, informa a los stakeholders y a cualquier usuario afectado.
+- Documenta qué fue rotado y la fecha en la que se invalidaron las credenciales.
+
+7) Reemplazo en despliegues
+- Actualiza las variables en GitHub Actions Secrets, servidores y contenedores.
+- Reinicia servicios que hayan almacenado las credenciales.
+
+8) Verificación
+- Confirma que la clave expuesta ya no funciona. Prueba endpoints con la nueva clave en entornos seguros.
+
+Notas finales:
+- Si necesitas, puedo generar los comandos específicos para git-filter-repo y guiarte en el proceso seguro de reescritura del historial.
+
 Contactos y acciones de emergencia
 - Si detectas un token activo en el historial público, revócalo inmediatamente y considera notificar a la plataforma (p. ej. GitHub Support) si fue expuesto públicamente.
 
