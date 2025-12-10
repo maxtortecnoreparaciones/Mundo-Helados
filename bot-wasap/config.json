@@ -13,7 +13,7 @@
     },
     "QR_IMAGE_PATH": "qr_code.jpg",
     "LOG_LEVEL": "info",
-    "GOOGLE_MAPS_API_KEY": "TU_API_KEY_AQUI",
+    "GOOGLE_MAPS_API_KEY": "SET_VIA_ENV",
     "GEMINI_API_KEY": "",
     "CONVERSATION_LOG_PATH": "conversations.log",
     "SPREADSHEET_ID": "1479sKgwA2ES503noFusdM-rOYv412-ogcqEouI6zQgI",
